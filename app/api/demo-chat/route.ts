@@ -16,7 +16,16 @@ function cosineSimilarity(vecA: number[], vecB: number[]) {
 
 export async function POST(request: Request) {
   try {
-    const { message, chatHistory, documentText, businessName, businessType } = await request.json();
+    const { 
+      message, 
+      chatHistory, 
+      documentText, 
+      businessName, 
+      businessType,
+      audio,
+      mimeType,
+      speechLanguage 
+    } = await request.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -27,6 +36,110 @@ export async function POST(request: Request) {
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
+
+    if (message === "GENERATE_PRESETS") {
+      const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+      const prompt = `
+You are an AI assistant helping to build an interactive demo sandbox for a business: "${businessName}" (a ${businessType || "Business"}).
+Given the business details below, generate exactly 5 realistic, short sample customer questions/messages that a customer might send to this business on WhatsApp.
+Return them as a JSON array of strings.
+
+Business Details / Knowledge Base:
+${documentText || "No additional info provided."}
+
+Rules for the 5 queries:
+1. One query should be in Hinglish (Hindi written in English alphabet, e.g. "kaha hai shop?", "price kitna hai?", "appointment milega?").
+2. One query should be in Marathi or another regional Indian language (e.g. "rate kay aahe?", "timing kay aahe?", "kiti vaaje paryant ughda aste?").
+3. One query should have some typical typos/grammar mistakes in English (e.g. "what the price", "delievery charge", "booking for sonday").
+4. One query should be a general query in Spanish or another global language (e.g. "¿dónde están?", "¿cuál es el precio?", "hola").
+5. One query should be a high-value booking query mentioning prices or packages (e.g. "I want to book the VIP Bridal Package for ₹8500", "I want to sign up for the annual plan").
+
+Respond ONLY with a JSON array of strings, e.g.:
+[
+  "query 1",
+  "query 2",
+  "query 3",
+  "query 4",
+  "query 5"
+]
+Do NOT include any markdown code blocks, backticks, or any text other than the JSON array.
+`;
+
+      const result = await model.generateContent(prompt);
+      const text = result.response.text().trim();
+      const jsonMatch = text.match(/\[[\s\S]*\]/);
+      if (!jsonMatch) {
+        throw new Error(`Failed to parse presets JSON: ${text}`);
+      }
+      const presets = JSON.parse(jsonMatch[0]);
+      return NextResponse.json({ presets });
+    }
+
+    let finalMessage = message || "";
+    let transcribedText = "";
+
+    // If audio is provided, perform transcription first on the backend
+    if (audio) {
+      const sttApiKey = process.env.GOOGLE_SPEECH_TO_TEXT_API_KEY;
+      if (!sttApiKey) {
+        return NextResponse.json(
+          { error: "GOOGLE_SPEECH_TO_TEXT_API_KEY is not configured in backend env." },
+          { status: 500 }
+        );
+      }
+
+      // Determine encoding based on MIME type
+      let encoding = "WEBM_OPUS";
+      let sampleRateHertz = 48000;
+
+      if (mimeType?.includes("ogg")) {
+        encoding = "OGG_OPUS";
+      } else if (mimeType?.includes("mp4") || mimeType?.includes("aac") || mimeType?.includes("m4a")) {
+        encoding = "MP3";
+        sampleRateHertz = 16000;
+      }
+
+      const sttPayload = {
+        config: {
+          encoding,
+          sampleRateHertz,
+          languageCode: "en-US",
+          alternativeLanguageCodes: ["hi-IN", "mr-IN", "es-ES"],
+        },
+        audio: {
+          content: audio,
+        },
+      };
+
+      const sttResponse = await fetch(
+        `https://speech.googleapis.com/v1/speech:recognize?key=${sttApiKey}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(sttPayload),
+        }
+      );
+
+      const sttData = await sttResponse.json();
+
+      if (sttData.error) {
+        console.error("Google Speech API error in chat route:", sttData.error);
+        return NextResponse.json({ error: sttData.error.message }, { status: 400 });
+      }
+
+      transcribedText = sttData.results
+        ?.map((result: any) => result.alternatives?.[0]?.transcript)
+        .join("\n") || "";
+
+      if (!transcribedText.trim()) {
+        return NextResponse.json({ error: "Could not transcribe audio. Speech was unclear or empty." }, { status: 400 });
+      }
+
+      finalMessage = transcribedText;
+    }
+
     const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
     const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
 
@@ -35,7 +148,7 @@ export async function POST(request: Request) {
 You are an advanced query preprocessor for a customer support AI assistant.
 Analyze the user's incoming query and return a valid JSON object matching the schema below.
 
-User Query: "${message}"
+User Query: "${finalMessage}"
 
 Rules:
 1. Clean up typos and grammatical mistakes.
@@ -131,7 +244,7 @@ ${contextText || "No context retrieved."}
 
 Conversation History:
 ${historyText || "No history."}
-Customer: ${message}
+Customer: ${finalMessage}
 
 Agent:`;
 
@@ -157,7 +270,7 @@ Agent:`;
 Analyze the customer's message and the AI's drafted response to evaluate lead metrics.
 Return a valid JSON object matching the schema below.
 
-Customer Query: "${message}"
+Customer Query: "${finalMessage}"
 AI Response: "${aiResponse}"
 
 Rules:
@@ -205,6 +318,7 @@ Respond ONLY with the JSON block. Do not include markdown code block formatting 
         estimatedValue,
       },
       status: finalStatus,
+      transcription: transcribedText,
     });
   } catch (error: any) {
     console.error("Error in demo chat API:", error);

@@ -20,13 +20,21 @@ import {
   User,
   CheckCircle,
   HelpCircle,
-  Eye
+  Eye,
+  Sliders,
+  Building,
+  RefreshCw,
+  Mic
 } from "lucide-react";
 
 interface Message {
   sender: "customer" | "agent" | "owner" | "system";
   text: string;
   timestamp: string;
+  isVoiceNote?: boolean;
+  transcribing?: boolean;
+  transcriptionText?: string;
+  duration?: string;
 }
 
 interface Conversation {
@@ -39,7 +47,18 @@ interface Conversation {
   status: "open" | "auto-handled" | "escalated" | "stale";
 }
 
-const DEFAULT_KNOWLEDGE = `Kritika's Beauty Studio Pricing & Policies:
+interface PresetQuery {
+  text: string;
+  label: string;
+}
+
+const TEMPLATES = [
+  {
+    id: "salon",
+    name: "Kritika's Beauty Studio",
+    type: "Beauty Salon",
+    label: "💇‍♀️ Beauty Salon & Spa",
+    knowledge: `Kritika's Beauty Studio Pricing & Policies:
 
 1. Services & Pricing:
 - Haircut: ₹500 for men, ₹800 for women (includes hair wash & styling).
@@ -55,9 +74,245 @@ const DEFAULT_KNOWLEDGE = `Kritika's Beauty Studio Pricing & Policies:
 
 3. General Policies:
 - We have separate sections for men and women.
-- Cancellations: Full refund of advance booking if canceled 24 hours prior.`;
+- Cancellations: Full refund of advance booking if canceled 24 hours prior.`,
+    presets: [
+      { text: "kaha hai tumhara shop?", label: "🇮🇳 Hinglish" },
+      { text: "haircut cha rate kay aahe?", label: "🇮🇳 Marathi" },
+      { text: "what the price of women haircut", label: "🇬🇧 Typos" },
+      { text: "donde esta su tienda?", label: "🇪🇸 Spanish" },
+      { text: "asdfghjklzxcvbnm", label: "⚠️ Gibberish" },
+      { text: "i want to book the VIP Bridal Package for ₹8500 this Sunday", label: "💰 High Value" }
+    ]
+  },
+  {
+    id: "bakery",
+    name: "The Sweet Tooth Bakery",
+    type: "Bakery & Cafe",
+    label: "🍰 Gourmet Bakery & Cafe",
+    knowledge: `The Sweet Tooth Bakery Menu & Delivery Policies:
+
+1. Menu & Pricing:
+- Chocolate Truffle Cake: ₹600 for 1/2 kg, ₹1,100 for 1 kg.
+- Red Velvet Cupcake: ₹80 each, box of 6 for ₹450.
+- Sourdough Bread: ₹200 per loaf (freshly baked daily at 8 AM).
+- Butter Croissant: ₹150 each.
+- Custom Cake: Starts at ₹1,500 per kg (requires 24 hours pre-order).
+
+2. Operations & Location:
+- Address: FC Road, Shivajinagar, Pune (next to Star Cafe).
+- Timings: 8:00 AM to 9:00 PM (Open all days).
+- Delivery: Free home delivery within 3 km for orders above ₹500. For other areas, standard charge of ₹50 applies.
+
+3. Special Orders:
+- All custom cakes require 50% advance payment.
+- Eggless options are available for all cakes at no extra cost.`,
+    presets: [
+      { text: "kya cake order pe banate ho?", label: "🇮🇳 Hinglish" },
+      { text: "cake cha rate sanga", label: "🇮🇳 Marathi" },
+      { text: "diliver to my home?", label: "🇬🇧 Typos" },
+      { text: "¿dónde está la panadería?", label: "🇪🇸 Spanish" },
+      { text: "qwertyuiopasdfghjkl", label: "⚠️ Gibberish" },
+      { text: "i want to order 3 tier Chocolate Truffle Cake for ₹5000", label: "💰 High Value" }
+    ]
+  },
+  {
+    id: "dental",
+    name: "Smile Dental Care",
+    type: "Dental Clinic",
+    label: "🦷 Dental Clinic",
+    knowledge: `Smile Dental Care Services & Appointments:
+
+1. Services & Treatment Fees:
+- Dental Consultation: ₹300 (includes digital X-ray if needed).
+- Teeth Cleaning & Scaling: ₹1,200.
+- Root Canal Treatment (RCT): ₹4,500 per tooth.
+- Ceramic Crown / Cap: ₹6,000 onwards.
+- Dental Implant: ₹25,000 (standard titanium implant).
+
+2. Practice Info & Address:
+- Address: 2nd Floor, Apex Heights, Kothrud, Pune.
+- Operating Hours: Mon-Sat 9:30 AM to 1:30 PM, 5:00 PM to 8:30 PM. Closed on Sundays.
+- Bookings: Prior appointment is highly recommended to avoid wait times. Emergency walk-ins are handled based on dentist availability.
+
+3. Policies:
+- We accept cash, UPI, and credit cards.
+- Follow-up checkup within 7 days of treatment is free.`,
+    presets: [
+      { text: "teeth whitening cost kitna hai?", label: "🇮🇳 Hinglish" },
+      { text: "root canal treatment cha kharch kiti aahe?", label: "🇮🇳 Marathi" },
+      { text: "cleaning teeth charge", label: "🇬🇧 Typos" },
+      { text: "¿tienen citas hoy?", label: "🇪🇸 Spanish" },
+      { text: "zxcvbnmpoiuytrewq", label: "⚠️ Gibberish" },
+      { text: "i want to book a Dental Implant session for ₹25000", label: "💰 High Value" }
+    ]
+  },
+  {
+    id: "gym",
+    name: "Iron Paradise Gym",
+    type: "Fitness Center",
+    label: "💪 Fitness Gym",
+    knowledge: `Iron Paradise Gym Memberships & Rules:
+
+1. Membership Plans:
+- Monthly Pass: ₹1,500 (gym access only).
+- 3-Month Plan: ₹4,000 (includes basic body composition assessment).
+- Annual Membership: ₹12,000 (best value, includes 10 personal trainer trial sessions).
+- Personal Training: ₹5,000 per month (one-on-one coaching, 12 sessions).
+
+2. Facility Info & Timings:
+- Location: 3rd Floor, Platinum Plaza, Baner Road, Pune.
+- Hours: Mon-Sat: 5:00 AM to 10:00 PM. Sun: 7:00 AM to 12:00 PM.
+- Facilities: Cardio section, free weights area, steam room, and lockers.
+
+3. Gym Rules:
+- Clean sports shoes must be worn on the gym floor.
+- Towel is mandatory during workouts.
+- Lockers are for daily use only; overnight storage is not allowed.`,
+    presets: [
+      { text: "trial batch milega kya?", label: "🇮🇳 Hinglish" },
+      { text: "gym timing kay aahe?", label: "🇮🇳 Marathi" },
+      { text: "personal training price", label: "🇬🇧 Typos" },
+      { text: "¿cuánto cuesta la mensualidad?", label: "🇪🇸 Spanish" },
+      { text: "mnbvcxzlkjhgfdsa", label: "⚠️ Gibberish" },
+      { text: "i want to sign up for the Yearly Membership with Personal Trainer for ₹17000", label: "💰 High Value" }
+    ]
+  },
+  {
+    id: "custom",
+    name: "",
+    type: "",
+    label: "✨ Custom Business",
+    knowledge: `[Enter your business details, products, prices, address, and timings here...]`,
+    presets: []
+  }
+];
+
+function getInitialInboxForTemplate(
+  templateId: string, 
+  businessName: string, 
+  businessType: string,
+  presets: PresetQuery[]
+): Conversation[] {
+  // Card 1: The active simulator card
+  const card1: Conversation = {
+    id: "conv-1",
+    phone: "+91 98765 43210",
+    lastMessage: `Hello! Welcome to ${businessName}...`,
+    time: "Just now",
+    value: 0,
+    intent: 0.2,
+    status: "auto-handled"
+  };
+
+  // Card 2: An open lead with high/medium intent
+  let card2Phone = "+91 99887 76655";
+  let card2Message = "";
+  let card2Value = 1500;
+  let card2Intent = 0.75;
+
+  // Card 3: An auto-handled lead with low value/intent
+  let card3Phone = "+91 91234 56789";
+  let card3Message = "";
+  let card3Value = 0;
+  let card3Intent = 0.4;
+
+  if (templateId === "salon") {
+    card2Phone = "+91 99887 76655";
+    card2Message = presets[2]?.text || "what the price of women haircut";
+    card2Value = 2000;
+    card2Intent = 0.75;
+
+     card3Phone = "+91 91234 56789";
+    card3Message = presets[0]?.text || "kaha hai tumhara shop?";
+    card3Value = 0;
+    card3Intent = 0.4;
+  } else if (templateId === "bakery") {
+    card2Phone = "+91 99887 76655";
+    card2Message = presets[2]?.text || "diliver to my home?";
+    card2Value = 1100;
+    card2Intent = 0.70;
+
+    card3Phone = "+91 91234 56789";
+    card3Message = presets[3]?.text || "¿dónde está la panadería?";
+    card3Value = 0;
+    card3Intent = 0.35;
+  } else if (templateId === "dental") {
+    card2Phone = "+91 88888 77777";
+    card2Message = presets[1]?.text || "root canal treatment cha kharch kiti aahe?";
+    card2Value = 4500;
+    card2Intent = 0.85;
+
+    card3Phone = "+91 91234 56789";
+    card3Message = presets[0]?.text || "teeth whitening cost kitna hai?";
+    card3Value = 1200;
+    card3Intent = 0.50;
+  } else if (templateId === "gym") {
+    card2Phone = "+91 77777 66666";
+    card2Message = presets[2]?.text || "personal training price";
+    card2Value = 5000;
+    card2Intent = 0.80;
+
+    card3Phone = "+91 91234 56789";
+    card3Message = presets[1]?.text || "gym timing kay aahe?";
+    card3Value = 1500;
+    card3Intent = 0.45;
+  } else {
+    // Custom business or customized templates
+    card2Phone = "+91 99000 88000";
+    card2Message = presets[2]?.text || presets[1]?.text || `I want to check rates for ${businessType}`;
+    
+    // Try to extract value from dynamic presets
+    let extractedVal = 1500;
+    presets.forEach(p => {
+      const match = p.text.match(/₹\s*(\d+)/);
+      if (match) {
+        extractedVal = Math.round(parseInt(match[1]) * 0.4); // standard service is ~40% of VIP package
+      }
+    });
+    card2Value = extractedVal;
+    card2Intent = 0.70;
+
+    card3Phone = "+91 91234 56789";
+    card3Message = presets[0]?.text || `Where is ${businessName} located?`;
+    card3Value = 0;
+    card3Intent = 0.40;
+  }
+
+  return [
+    card1,
+    {
+      id: "conv-2",
+      phone: card2Phone,
+      lastMessage: card2Message,
+      time: "10m ago",
+      value: card2Value,
+      intent: card2Intent,
+      status: "open"
+    },
+    {
+      id: "conv-3",
+      phone: card3Phone,
+      lastMessage: card3Message,
+      time: "1h ago",
+      value: card3Value,
+      intent: card3Intent,
+      status: "auto-handled"
+    }
+  ];
+}
 
 export default function DemoPage() {
+  const [isSetupComplete, setIsSetupComplete] = useState(false);
+  const [setupTemplate, setSetupTemplate] = useState("salon");
+  const [setupBusinessName, setSetupBusinessName] = useState("Kritika's Beauty Studio");
+  const [setupBusinessType, setSetupBusinessType] = useState("Beauty Salon");
+  const [setupKnowledgeText, setSetupKnowledgeText] = useState(TEMPLATES[0].knowledge);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [loadingStepText, setLoadingStepText] = useState("");
+
+  const [presets, setPresets] = useState<PresetQuery[]>(TEMPLATES[0].presets);
+
   const [chatHistory, setChatHistory] = useState<Message[]>([
     {
       sender: "system",
@@ -75,38 +330,91 @@ export default function DemoPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [businessName, setBusinessName] = useState("Kritika's Beauty Studio");
   const [businessType, setBusinessType] = useState("Beauty Salon");
-  const [knowledgeText, setKnowledgeText] = useState(DEFAULT_KNOWLEDGE);
+  const [knowledgeText, setKnowledgeText] = useState(TEMPLATES[0].knowledge);
+
+  // Speech Recognition / MediaRecorder States
+  const [isListening, setIsListening] = useState(false);
+  const [recognitionSupported, setRecognitionSupported] = useState(true);
+  const mediaRecorderRef = useRef<any>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const hasMedia = !!(navigator.mediaDevices && (window as any).MediaRecorder);
+      setRecognitionSupported(hasMedia);
+    }
+  }, []);
+
+  const startTimeRef = useRef<number>(0);
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      startTimeRef.current = Date.now();
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach((track) => track.stop());
+
+        const durationMs = Date.now() - startTimeRef.current;
+        const durationSeconds = Math.round(durationMs / 1000);
+        const m = Math.floor(durationSeconds / 60);
+        const s = durationSeconds % 60;
+        const durationStr = `${m}:${s < 10 ? '0' : ''}${s}`;
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
+        
+        // Convert blob to base64
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Data = (reader.result as string).split(",")[1];
+          
+          try {
+            await handleSendMessage(undefined, { base64: base64Data, mimeType: mediaRecorder.mimeType }, durationStr);
+          } catch (err) {
+            console.error("Failed to send voice message:", err);
+          }
+        };
+      };
+
+      mediaRecorder.start();
+      setIsListening(true);
+    } catch (err) {
+      console.error("Failed to start voice capture:", err);
+      alert("Microphone access denied or unsupported format.");
+      setIsListening(false);
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsListening(false);
+  };
+
+  const toggleListening = () => {
+    if (isListening) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
 
   // Active sandbox inbox
-  const [inboxList, setInboxList] = useState<Conversation[]>([
-    {
-      id: "conv-1",
-      phone: "+91 98765 43210",
-      lastMessage: "Hello! Welcome to Kritika's Beauty Studio...",
-      time: "Just now",
-      value: 0,
-      intent: 0.2,
-      status: "auto-handled"
-    },
-    {
-      id: "conv-2",
-      phone: "+91 99887 76655",
-      lastMessage: "I want to know about massage rates.",
-      time: "10m ago",
-      value: 2000,
-      intent: 0.75,
-      status: "open"
-    },
-    {
-      id: "conv-3",
-      phone: "+91 91234 56789",
-      lastMessage: "What is your location?",
-      time: "1h ago",
-      value: 0,
-      intent: 0.4,
-      status: "auto-handled"
-    }
-  ]);
+  const [inboxList, setInboxList] = useState<Conversation[]>(() => {
+    return getInitialInboxForTemplate("salon", "Kritika's Beauty Studio", "Beauty Salon", TEMPLATES[0].presets);
+  });
 
   const [activeTab, setActiveTab] = useState<"inbox" | "knowledge" | "pipeline">("pipeline");
   const [pipelineLogs, setPipelineLogs] = useState<any>(null);
@@ -126,44 +434,200 @@ export default function DemoPage() {
     setInputMessage(presetText);
   };
 
-  // Submit message to the API
-  const handleSendMessage = async (textToSend?: string) => {
-    const text = (textToSend || inputMessage).trim();
-    if (!text) return;
+  const handleLaunchSandbox = async () => {
+    setIsLoading(true);
+    setLoadingStep(0);
+    setLoadingStepText("Parsing business profile & vertical...");
 
-    if (!textToSend) setInputMessage("");
+    const selectedTpl = TEMPLATES.find(t => t.id === setupTemplate);
+    const isModified = !selectedTpl || 
+                       setupBusinessName !== selectedTpl.name || 
+                       setupBusinessType !== selectedTpl.type || 
+                       setupKnowledgeText !== selectedTpl.knowledge;
 
-    // Add customer message
-    const newHistory = [
-      ...chatHistory,
+    let finalPresets = selectedTpl ? [...selectedTpl.presets] : [];
+
+    // Step 1: Parsing profile (800ms)
+    await new Promise(resolve => setTimeout(resolve, 800));
+    setLoadingStep(1);
+    setLoadingStepText("Splitting knowledge document and generating vector embeddings (gemini-embedding-001)...");
+
+    // Step 2: Generating embeddings (1000ms)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    setLoadingStep(2);
+    setLoadingStepText("Indexing pgvector database node & setting confidence thresholds...");
+
+    // Step 3: Indexing database (1000ms)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    setLoadingStep(3);
+    setLoadingStepText("Querying Gemini 3.5 Flash to compile custom preset queries...");
+
+    // Trigger API call in parallel if modified or custom
+    let apiPromise = Promise.resolve<PresetQuery[] | null>(null);
+    if (isModified || setupTemplate === "custom") {
+      apiPromise = fetch("/api/demo-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "GENERATE_PRESETS",
+          businessName: setupBusinessName,
+          businessType: setupBusinessType,
+          documentText: setupKnowledgeText
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.presets && Array.isArray(data.presets)) {
+          const labels = ["🇮🇳 Hinglish", "🇮🇳 Marathi", "🇬🇧 Typos", "🇪🇸 Spanish", "💰 High Value"];
+          const newPresets = data.presets.slice(0, 5).map((q: string, idx: number) => ({
+            text: q,
+            label: labels[idx] || "Simulated Query"
+          }));
+          // Add a default gibberish query
+          newPresets.push({ text: "asdfghjklzxcvbnm", label: "⚠️ Gibberish" });
+          return newPresets;
+        }
+        return null;
+      })
+      .catch(err => {
+        console.error("Failed to generate dynamic presets:", err);
+        return null;
+      });
+    }
+
+    const [apiPresetsResult] = await Promise.all([
+      apiPromise,
+      new Promise(resolve => setTimeout(resolve, 1200)) // Wait at least 1.2s for Step 4
+    ]);
+
+    if (apiPresetsResult) {
+      finalPresets = apiPresetsResult;
+    } else if (isModified || setupTemplate === "custom") {
+      // Fallback presets if API fails or isn't configured
+      finalPresets = [
+        { text: `kya ${setupBusinessName} open hai?`, label: "🇮🇳 Hinglish" },
+        { text: `${setupBusinessType} timing kay aahe?`, label: "🇮🇳 Marathi" },
+        { text: `what price of standard services in ${setupBusinessName}`, label: "🇬🇧 Typos" },
+        { text: `¿dónde está la tienda de ${setupBusinessName}?`, label: "🇪🇸 Spanish" },
+        { text: "asdfghjklzxcvbnm", label: "⚠️ Gibberish" },
+        { text: `i want to book a VIP package for ₹9500`, label: "💰 High Value" }
+      ];
+    }
+
+    setLoadingStep(4);
+    setLoadingStepText("Initializing real-time simulation node...");
+
+    // Step 5: Initialize node (600ms)
+    await new Promise(resolve => setTimeout(resolve, 600));
+
+    // Commit onboarding details to main state
+    setBusinessName(setupBusinessName);
+    setBusinessType(setupBusinessType);
+    setKnowledgeText(setupKnowledgeText);
+    setPresets(finalPresets);
+
+    // Re-initialize chat history
+    setChatHistory([
       {
-        sender: "customer" as const,
-        text,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        sender: "system",
+        text: `WhatsApp chat session initialized with ${setupBusinessName}.`,
+        timestamp: "10:00 AM"
+      },
+      {
+        sender: "agent",
+        text: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`,
+        timestamp: "10:00 AM"
       }
-    ];
+    ]);
+
+    // Re-initialize inbox queue dynamically
+    setInboxList(getInitialInboxForTemplate(setupTemplate, setupBusinessName, setupBusinessType, finalPresets));
+
+    setIsStale(false);
+    setPipelineLogs(null);
+    setActiveTab("pipeline");
+
+    setIsLoading(false);
+    setIsSetupComplete(true);
+  };
+
+  // Submit message to the API
+  const handleSendMessage = async (
+    textToSend?: string,
+    audioData?: { base64: string; mimeType: string },
+    voiceDuration?: string
+  ) => {
+    const text = (textToSend || inputMessage).trim();
+    const isVoice = !!audioData;
+    if (!text && !isVoice) return;
+
+    if (!textToSend && !isVoice) setInputMessage("");
+
+    // Add customer message (voice note or text message)
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const newMsg: Message = isVoice ? {
+      sender: "customer" as const,
+      text: "[Voice Note]",
+      timestamp,
+      isVoiceNote: true,
+      transcribing: true,
+      duration: voiceDuration || "0:05"
+    } : {
+      sender: "customer" as const,
+      text,
+      timestamp
+    };
+
+    const newHistory = [...chatHistory, newMsg];
     setChatHistory(newHistory);
     setIsTyping(true);
 
     try {
+      const payload: any = {
+        chatHistory: newHistory.filter((m) => m.sender !== "system").map((m) => ({
+          sender: m.sender,
+          text: m.isVoiceNote && m.transcriptionText ? m.transcriptionText : m.text,
+          timestamp: m.timestamp
+        })),
+        documentText: knowledgeText,
+        businessName,
+        businessType
+      };
+
+      if (isVoice && audioData) {
+        payload.audio = audioData.base64;
+        payload.mimeType = audioData.mimeType;
+      } else {
+        payload.message = text;
+      }
+
       const response = await fetch("/api/demo-chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          message: text,
-          chatHistory: newHistory.filter((m) => m.sender !== "system"),
-          documentText: knowledgeText,
-          businessName,
-          businessType
-        })
+        body: JSON.stringify(payload)
       });
 
       const data = await response.json();
       setIsTyping(false);
 
       if (data.error) {
+        if (isVoice) {
+          setChatHistory((prev) => 
+            prev.map((msg) => {
+              if (msg.isVoiceNote && msg.transcribing) {
+                return {
+                  ...msg,
+                  transcribing: false,
+                  text: `[Voice Note Error: ${data.error}]`,
+                  transcriptionText: `Failed to transcribe: ${data.error}`
+                };
+              }
+              return msg;
+            })
+          );
+        }
         setChatHistory((prev) => [
           ...prev,
           {
@@ -175,8 +639,24 @@ export default function DemoPage() {
         return;
       }
 
+      // If voice note succeeded, update its transcription
+      if (isVoice && data.transcription) {
+        setChatHistory((prev) => 
+          prev.map((msg) => {
+            if (msg.isVoiceNote && msg.transcribing) {
+              return {
+                ...msg,
+                transcribing: false,
+                transcriptionText: data.transcription,
+                text: `🎤 Voice Note: "${data.transcription}"`
+              };
+            }
+            return msg;
+          })
+        );
+      }
+
       // Add AI Response or Escalation note
-      const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       if (data.response === "ESCALATE" || data.status === "escalated") {
         setChatHistory((prev) => [
           ...prev,
@@ -206,7 +686,9 @@ export default function DemoPage() {
           if (conv.id === "conv-1") {
             return {
               ...conv,
-              lastMessage: data.response === "ESCALATE" ? "Escalated to owner" : data.response,
+              lastMessage: data.response === "ESCALATE" 
+                ? "Escalated to owner" 
+                : (isVoice ? `🎤 ${data.transcription}` : data.response),
               time: "Just now",
               value: data.evaluation.estimatedValue,
               intent: data.evaluation.intentScore,
@@ -328,6 +810,179 @@ export default function DemoPage() {
   const statEscalated = inboxList.filter((c) => c.status === "escalated").length;
   const statStale = inboxList.filter((c) => c.status === "stale").length;
 
+  if (!isSetupComplete) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-black flex flex-col relative overflow-hidden">
+        {/* Background radial glow */}
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_var(--tw-gradient-stops))] from-emerald-950/20 via-slate-950 to-slate-950 pointer-events-none" />
+
+        <header className="relative border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Link href="/" className="p-1 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900 transition-all">
+                <ArrowLeft className="w-4 h-4" />
+              </Link>
+              <div>
+                <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-400 bg-clip-text text-transparent">WAPI SANDBOX</span>
+                <span className="text-[9px] block font-mono text-emerald-500 tracking-widest leading-none">INTERACTIVE SIMULATION</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center p-6 relative z-10">
+          {isLoading ? (
+            /* STUNNING INDEXING LOADER */
+            <div className="max-w-md w-full bg-slate-900/40 border border-slate-900 backdrop-blur-md rounded-3xl p-8 shadow-2xl flex flex-col items-center text-center">
+              <div className="relative w-20 h-20 mb-8 flex items-center justify-center">
+                <div className="absolute inset-0 rounded-full border-2 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
+                <div className="absolute inset-2 rounded-full border border-teal-500/10 border-b-teal-500 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }}></div>
+                <Bot className="w-8 h-8 text-emerald-400 animate-pulse" />
+              </div>
+
+              <h2 className="text-xl font-bold text-white mb-2">Initializing AI Sandbox</h2>
+              <p className="text-xs text-slate-400 mb-8 max-w-xs">
+                Setting up custom Vector database and prompt logic for <span className="text-emerald-400 font-semibold">{setupBusinessName || "your business"}</span>...
+              </p>
+
+              <div className="w-full flex flex-col gap-3.5 text-left bg-slate-950 p-4 rounded-2xl border border-slate-900">
+                {[
+                  "Parse business profile & vertical",
+                  "Generate vector chunks & embeddings",
+                  "Index pgvector database node",
+                  "Compile AI-agent custom presets",
+                  "Initialize real-time simulation"
+                ].map((step, idx) => {
+                  let statusColor = "text-slate-650";
+                  let indicator = <div className="w-1.5 h-1.5 rounded-full bg-slate-805" />;
+                  
+                  if (loadingStep > idx) {
+                    statusColor = "text-emerald-400/80 font-medium";
+                    indicator = <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />;
+                  } else if (loadingStep === idx) {
+                    statusColor = "text-slate-200 font-semibold animate-pulse";
+                    indicator = <div className="w-2 h-2 rounded-full bg-teal-400 animate-ping shrink-0" />;
+                  }
+                  
+                  return (
+                    <div key={idx} className="flex items-center gap-3 text-xs">
+                      <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                        {indicator}
+                      </div>
+                      <span className={statusColor}>{step}</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <span className="text-[10px] text-slate-500 font-mono mt-6 block uppercase tracking-wider">
+                {loadingStepText}
+              </span>
+            </div>
+          ) : (
+            /* GORGEOUS ONBOARDING FORM */
+            <div className="max-w-2xl w-full bg-slate-900/40 border border-slate-900 backdrop-blur-md rounded-3xl p-8 shadow-2xl flex flex-col gap-6">
+              <div className="flex flex-col gap-1.5 text-center sm:text-left">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center mb-2 mx-auto sm:mx-0">
+                  <Building className="w-5 h-5" />
+                </div>
+                <h1 className="text-2xl font-bold text-white flex items-center gap-2 justify-center sm:justify-start">
+                  Configure Sandbox Business
+                </h1>
+                <p className="text-xs text-slate-400">
+                  Wapi works dynamically based on your business specifications. Select a template below or write your own to test.
+                </p>
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <span className="text-[10px] uppercase font-mono text-slate-500">Select Business Template</span>
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                  {TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.id}
+                      onClick={() => {
+                        setSetupTemplate(tpl.id);
+                        setSetupBusinessName(tpl.name);
+                        setSetupBusinessType(tpl.type);
+                        setSetupKnowledgeText(tpl.knowledge);
+                      }}
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold text-center border transition-all ${
+                        setupTemplate === tpl.id
+                          ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400 shadow-sm"
+                          : "bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200"
+                      }`}
+                    >
+                      {tpl.label.split(" ")[0]}
+                      <span className="block text-[9px] font-normal mt-0.5 opacity-80">
+                        {tpl.label.split(" ").slice(1).join(" ")}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase">Business Name</label>
+                  <input
+                    type="text"
+                    value={setupBusinessName}
+                    onChange={(e) => {
+                      setSetupBusinessName(e.target.value);
+                      if (setupTemplate !== "custom") setSetupTemplate("custom");
+                    }}
+                    placeholder="e.g. Blue Tokai Coffee"
+                    className="bg-slate-950 border border-slate-850 rounded-xl px-4 py-2.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-mono text-slate-500 uppercase">Vertical / Type</label>
+                  <input
+                    type="text"
+                    value={setupBusinessType}
+                    onChange={(e) => {
+                      setSetupBusinessType(e.target.value);
+                      if (setupTemplate !== "custom") setSetupTemplate("custom");
+                    }}
+                    placeholder="e.g. Specialty Cafe"
+                    className="bg-slate-950 border border-slate-850 rounded-xl px-4 py-2.5 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-[10px] font-mono text-slate-500 uppercase flex items-center justify-between">
+                  <span>Business Knowledge Base & Pricing List</span>
+                  {setupTemplate !== "custom" && (
+                    <span className="text-[9px] text-emerald-400 font-normal">Prepopulated template loaded</span>
+                  )}
+                </label>
+                <textarea
+                  value={setupKnowledgeText}
+                  onChange={(e) => {
+                    setSetupKnowledgeText(e.target.value);
+                    if (setupTemplate !== "custom") setSetupTemplate("custom");
+                  }}
+                  rows={8}
+                  className="w-full bg-slate-950 border border-slate-850 rounded-xl p-4 text-xs font-mono text-slate-300 focus:outline-none focus:border-emerald-500/50 leading-relaxed resize-y"
+                  placeholder="Paste your menu, prices, address, timings, and policies here..."
+                />
+              </div>
+
+              <button
+                onClick={handleLaunchSandbox}
+                disabled={!setupBusinessName.trim() || !setupKnowledgeText.trim()}
+                className="w-full py-3.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-indigo-600 rounded-xl text-slate-950 text-xs font-bold hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all shadow-[0_0_20px_rgba(16,185,129,0.3)] mt-2"
+              >
+                Initialize AI Brain & Launch Sandbox
+              </button>
+            </div>
+          )}
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-black">
       {/* Background radial glow */}
@@ -345,8 +1000,21 @@ export default function DemoPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setSetupTemplate("custom");
+                setSetupBusinessName(businessName);
+                setSetupBusinessType(businessType);
+                setSetupKnowledgeText(knowledgeText);
+                setIsSetupComplete(false);
+              }}
+              className="text-[10px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900 transition-all font-semibold"
+            >
+              <Sliders className="w-3 h-3 text-emerald-400" />
+              Configure Business
+            </button>
+            <span className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
               Local Simulation Node
             </span>
@@ -371,42 +1039,20 @@ export default function DemoPage() {
           <div className="flex flex-col gap-2 p-4 bg-slate-900/40 border border-slate-850 rounded-2xl">
             <span className="text-[10px] uppercase font-mono text-slate-500 block">Click a preset query to load & run:</span>
             <div className="flex flex-wrap gap-1.5 mt-1">
-              <button
-                onClick={() => handlePresetClick("kaha hai tumhara shop?")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left"
-              >
-                🇮🇳 "kaha hai tumhara shop?" (Hinglish)
-              </button>
-              <button
-                onClick={() => handlePresetClick("haircut cha rate kay aahe?")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left"
-              >
-                🇮🇳 "haircut cha rate kay aahe?" (Marathi)
-              </button>
-              <button
-                onClick={() => handlePresetClick("what the price of women haircut")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left"
-              >
-                🇬🇧 "what the price of women haircut" (Typos)
-              </button>
-              <button
-                onClick={() => handlePresetClick("donde esta su tienda?")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left"
-              >
-                🇪🇸 "donde esta su tienda?" (Spanish)
-              </button>
-              <button
-                onClick={() => handlePresetClick("asdfghjklzxcvbnm")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-rose-500/50 hover:text-rose-400 transition-all text-left"
-              >
-                ⚠️ "asdfghjklzxcvbnm" (Gibberish)
-              </button>
-              <button
-                onClick={() => handlePresetClick("i want to book the VIP Bridal Package for ₹8500 this Sunday")}
-                className="px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-800 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left"
-              >
-                💰 "i want to book the VIP Bridal Package" (High Value)
-              </button>
+              {presets.map((preset, idx) => {
+                const isGibberish = preset.label.includes("Gibberish") || preset.text === "asdfghjklzxcvbnm";
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => handlePresetClick(preset.text)}
+                    className={`px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-805 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left ${
+                      isGibberish ? "hover:border-rose-500/50 hover:text-rose-400" : ""
+                    }`}
+                  >
+                    {preset.label} "{preset.text.length > 50 ? preset.text.substring(0, 47) + '...' : preset.text}"
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -479,6 +1125,61 @@ export default function DemoPage() {
                   bubbleClass += "bg-[#202c33] text-slate-100 self-start rounded-tl-none";
                 }
 
+                if (msg.isVoiceNote) {
+                  return (
+                    <div key={index} className="flex flex-col items-end w-full">
+                      <div className="bg-[#0b5c46] text-white rounded-2xl rounded-tr-none px-3.5 py-2.5 max-w-[85%] flex flex-col gap-2 shadow-sm">
+                        {/* Voice Note Row */}
+                        <div className="flex items-center gap-3 min-w-[200px]">
+                          {/* Play/Pause Button */}
+                          <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
+                            <svg className="w-3.5 h-3.5 fill-current" viewBox="0 0 24 24">
+                              <path d="M8 5v14l11-7z" />
+                            </svg>
+                          </div>
+
+                          {/* Waveform Visualization */}
+                          <div className="flex-1 flex items-center gap-1 py-1">
+                            <span className="w-1 h-3 bg-emerald-300/40 rounded-full"></span>
+                            <span className="w-1 h-5 bg-emerald-300/60 rounded-full"></span>
+                            <span className="w-1 h-4 bg-emerald-300/80 rounded-full animate-pulse"></span>
+                            <span className="w-1 h-6 bg-emerald-300 rounded-full"></span>
+                            <span className="w-1 h-3 bg-emerald-300/70 rounded-full"></span>
+                            <span className="w-1 h-5 bg-emerald-300/50 rounded-full"></span>
+                            <span className="w-1 h-4 bg-emerald-300/30 rounded-full"></span>
+                          </div>
+
+                          {/* Duration & Mic Status */}
+                          <div className="flex flex-col items-end shrink-0">
+                            <span className="text-[9px] text-emerald-300/80 font-mono">{msg.duration || "0:05"}</span>
+                            <Mic className="w-3.5 h-3.5 text-sky-400 mt-0.5" />
+                          </div>
+                        </div>
+
+                        {/* Transcription Status */}
+                        <div className="border-t border-emerald-500/30 pt-1.5 mt-0.5">
+                          {msg.transcribing ? (
+                            <span className="text-[10px] text-emerald-200/70 flex items-center gap-1.5 italic">
+                              <span className="w-1.5 h-1.5 bg-emerald-300 rounded-full animate-ping"></span>
+                              Transcribing voice note...
+                            </span>
+                          ) : (
+                            <div className="text-[10px] text-emerald-100/90 leading-relaxed font-sans">
+                              <span className="font-mono text-[9px] text-emerald-300/75 uppercase tracking-wider block mb-0.5">Transcribed:</span>
+                              "{msg.transcriptionText}"
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Timestamp */}
+                        <span className="text-[8px] text-emerald-300/65 block text-right font-mono">
+                          {msg.timestamp}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={index} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
                     <div className={bubbleClass}>
@@ -508,18 +1209,33 @@ export default function DemoPage() {
 
             {/* Input Footer */}
             <div className="bg-[#111b21] p-3 border-t border-slate-900 flex items-center gap-2 shrink-0">
+              {recognitionSupported && (
+                <button
+                  onClick={toggleListening}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                    isListening
+                      ? "bg-rose-500 text-white animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]"
+                      : "bg-[#2a3942] text-slate-400 hover:text-white"
+                  }`}
+                  title={isListening ? "Stop listening" : "Start voice command"}
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              )}
+
               <input
                 type="text"
                 value={inputMessage}
                 onChange={(e) => setInputMessage(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                placeholder="Type a WhatsApp message..."
+                placeholder={isListening ? "Listening..." : "Type a WhatsApp message..."}
                 className="flex-1 bg-[#2a3942] border border-transparent rounded-lg px-3.5 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50"
+                disabled={isListening}
               />
               <button
                 onClick={() => handleSendMessage()}
-                disabled={!inputMessage.trim()}
-                className="w-8 h-8 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all"
+                disabled={!inputMessage.trim() || isListening}
+                className="w-8 h-8 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" />
               </button>
@@ -898,22 +1614,36 @@ export default function DemoPage() {
                     />
                   </div>
 
-                  <button
-                    onClick={() => {
-                      setChatHistory((prev) => [
-                        ...prev,
-                        {
-                          sender: "system",
-                          text: "🧠 AI brain successfully re-indexed and updated with new document changes.",
-                          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                        }
-                      ]);
-                      setActiveTab("pipeline");
-                    }}
-                    className="w-full py-2 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg text-slate-950 text-xs font-bold hover:brightness-110 active:scale-95 transition-all shadow-[0_0_15px_rgba(16,185,129,0.2)]"
-                  >
-                    Index Documents & Update AI Brain
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setChatHistory((prev) => [
+                          ...prev,
+                          {
+                            sender: "system",
+                            text: "🧠 AI brain successfully re-indexed and updated with new document changes.",
+                            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                          }
+                        ]);
+                        setActiveTab("pipeline");
+                      }}
+                      className="flex-1 py-2 bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg text-slate-950 text-xs font-bold hover:brightness-110 active:scale-95 transition-all shadow-[0_0_15px_rgba(16,185,129,0.2)]"
+                    >
+                      Index Documents & Update AI Brain
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSetupTemplate("custom");
+                        setSetupBusinessName(businessName);
+                        setSetupBusinessType(businessType);
+                        setSetupKnowledgeText(knowledgeText);
+                        setIsSetupComplete(false);
+                      }}
+                      className="px-4 py-2 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900 transition-all rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                    >
+                      <Sliders className="w-3.5 h-3.5" /> Reconfigure
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

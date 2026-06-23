@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { createClient } from "@/lib/client";
-import { Sparkles, Loader2, AlertCircle } from "lucide-react";
+import { Sparkles, Loader2, AlertCircle, AlertTriangle } from "lucide-react";
 
 export default function SignUp() {
   const router = useRouter();
@@ -93,6 +93,17 @@ export default function SignUp() {
 
         {/* Form panel */}
         <div className="bg-slate-900/50 backdrop-blur-md border border-slate-900 rounded-2xl p-8 shadow-2xl">
+          {/* Phase 2 Under Construction Banner */}
+          <div className="mb-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex flex-col gap-1.5 text-amber-300 text-sm">
+            <div className="flex items-center gap-2 font-semibold text-amber-400">
+              <AlertTriangle className="w-5 h-5 shrink-0 animate-pulse" />
+              <span>Phase 2 Under Construction</span>
+            </div>
+            <p className="text-xs text-slate-400 pl-7 leading-relaxed">
+              Authentication services are undergoing maintenance for Phase 2. Access might be restricted or display placeholder data.
+            </p>
+          </div>
+
           {errorMsg && (
             <div className="mb-6 p-4 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center gap-3 text-rose-400 text-sm">
               <AlertCircle className="w-5 h-5 shrink-0" />
