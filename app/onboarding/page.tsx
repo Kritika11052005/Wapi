@@ -1,18 +1,19 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { createClient } from "@/lib/client";
-import { 
-  Building2, 
-  Upload, 
-  Smartphone, 
-  CheckCircle2, 
-  Loader2, 
-  ArrowRight, 
-  ArrowLeft, 
-  AlertCircle 
+import {
+  Building2,
+  Upload,
+  Smartphone,
+  CheckCircle2,
+  Loader2,
+  ArrowRight,
+  ArrowLeft,
+  AlertCircle
 } from "lucide-react";
 
 export default function Onboarding() {
@@ -47,21 +48,21 @@ export default function Onboarding() {
         router.push("/auth/signin");
         return;
       }
-      
+
       // Check if business profile exists
       const { data: biz } = await supabase
         .from("businesses")
         .select("*")
         .eq("user_id", user.id)
         .single();
-      
+
       if (biz) {
         setBusinessId(biz.id);
         setBizName(biz.name || "");
         setBizVertical(biz.vertical || "salon");
         setOwnerPhone(biz.owner_phone || "");
         setCity(biz.city || "");
-        
+
         if (biz.onboarding_complete) {
           router.push("/dashboard");
         } else {
@@ -124,7 +125,7 @@ export default function Onboarding() {
       }
 
       if (result.error) throw result.error;
-      
+
       setBusinessId(result.data.id);
       setStep(2);
     } catch (err: any) {
@@ -222,7 +223,7 @@ export default function Onboarding() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-emerald-950/20 via-slate-950 to-slate-950 pointer-events-none" />
 
       <div className="w-full max-w-2xl relative z-10">
-        
+
         {/* Onboarding Steps Indicators */}
         <div className="flex justify-between items-center mb-10 max-w-md mx-auto relative">
           <div className="absolute left-0 right-0 top-1/2 h-0.5 bg-slate-900 -z-10" />
@@ -238,14 +239,13 @@ export default function Onboarding() {
             const isActive = step === s.num;
             return (
               <div key={s.num} className="flex flex-col items-center gap-2">
-                <div 
-                  className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all ${
-                    isCompleted 
-                      ? "bg-emerald-500 border-emerald-500 text-slate-950" 
-                      : isActive 
-                        ? "bg-slate-900 border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]" 
+                <div
+                  className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all ${isCompleted
+                      ? "bg-emerald-500 border-emerald-500 text-slate-950"
+                      : isActive
+                        ? "bg-slate-900 border-emerald-400 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.3)]"
                         : "bg-slate-950 border-slate-800 text-slate-600"
-                  }`}
+                    }`}
                 >
                   {isCompleted ? <CheckCircle2 className="w-5 h-5" /> : <Icon className="w-4 h-4" />}
                 </div>
@@ -289,6 +289,7 @@ export default function Onboarding() {
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Vertical Sector</label>
                   <select
+                    aria-label="select"
                     value={bizVertical}
                     onChange={(e) => setBizVertical(e.target.value)}
                     className="w-full px-4 py-3 rounded-lg bg-slate-950 border border-slate-900 text-slate-100 focus:outline-none focus:border-emerald-500 transition-colors"
@@ -304,7 +305,7 @@ export default function Onboarding() {
 
               <div className="grid md:grid-cols-2 gap-5">
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner's Phone Number</label>
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">Owner&apos;s Phone Number</label>
                   <input
                     type="text"
                     required
@@ -348,8 +349,9 @@ export default function Onboarding() {
                 <h2 className="text-2xl font-bold text-white mb-1">Add your pricing & guidelines</h2>
                 <p className="text-sm text-slate-400">Paste your price list, policies, FAQ, and operating hours below. Gemini uses this to reply to inquiries.</p>
               </div>
-              <button 
-                onClick={() => setStep(1)} 
+              <button
+                aria-label="button"
+                onClick={() => setStep(1)}
                 className="p-2 text-slate-500 hover:text-slate-300 transition-colors"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -399,8 +401,9 @@ export default function Onboarding() {
                 <h2 className="text-2xl font-bold text-white mb-1">Verify WhatsApp Webhook</h2>
                 <p className="text-sm text-slate-400">Ensure the Meta cloud integration endpoint is receiving payloads.</p>
               </div>
-              <button 
-                onClick={() => setStep(2)} 
+              <button
+                aria-label="button"
+                onClick={() => setStep(2)}
                 className="p-2 text-slate-500 hover:text-slate-300 transition-colors"
               >
                 <ArrowLeft className="w-5 h-5" />
@@ -410,11 +413,11 @@ export default function Onboarding() {
             <div className="p-6 rounded-2xl bg-slate-950 border border-slate-900 mb-6">
               <span className="text-xs uppercase font-bold text-emerald-400 block mb-2 tracking-wider">Test Instructions</span>
               <p className="text-sm text-slate-300 leading-relaxed mb-4">
-                1. Send any test WhatsApp message (e.g. "Hi, what are your rates?") from your phone to the business number configured.
+                1. Send any test WhatsApp message (e.g. &qout;Hi, what are your rates?&qout;) from your phone to the business number configured.
                 <br />
                 2. Click the verification check below. Wapi checks if the webhook has generated a new conversation log in Supabase.
               </p>
-              
+
               <div className="flex items-center gap-3 py-2">
                 <div className={`w-3 h-3 rounded-full ${verified ? "bg-emerald-400 animate-pulse" : "bg-amber-400 animate-ping"}`} />
                 <span className="text-xs font-mono text-slate-400">

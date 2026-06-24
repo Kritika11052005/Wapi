@@ -1,5 +1,7 @@
 import { LemmaWorkflow } from "@lemma/sdk";
 import { wApiAgent } from "./agent";
+import { preprocessCustomerMessage } from "@/lib/agent/preprocessor";
+import { parseAgentResponse } from "@/lib/agent/router";
 
 export const messageHandlingWorkflow = new LemmaWorkflow({
   name: "whatsapp-message-handler",
@@ -73,7 +75,8 @@ Customer message:
           return { chunks: [] };
         }
 
-        const queryToSearch = ctx.steps.preprocess.cleanedEnglishQuery || ctx.steps.receive.message;
+        const rawQuery = ctx.steps.preprocess.cleanedEnglishQuery || ctx.steps.receive.message;
+        const queryToSearch = preprocessCustomerMessage(rawQuery);
         const chunks = await wApiAgent.documentStore.search({
           query: queryToSearch,
           businessId: ctx.steps.receive.businessId,
@@ -87,45 +90,73 @@ Customer message:
     },
     {
       name: "infer",
-      fn: async (ctx) => wApiAgent.run({
-        userMessage: ctx.steps.receive.message,
-        preprocessedQuery: ctx.steps.preprocess.cleanedEnglishQuery,
-        detectedLanguage: ctx.steps.preprocess.detectedLanguage,
-        context: ctx.steps["retrieve-context"].chunks,
-        conversationHistory: ctx.input.history || [],
-        businessName: ctx.input.businessName,
-      }),
+      fn: async (ctx) => {
+        // Inject harassment count into conversation history so Gemini sees it as context
+        // (SDK only replaces {business_name} and {business_vertical} — we cannot modify sdk.ts)
+        const history = [...(ctx.input.history || [])];
+        const harassmentCount = ctx.input.harassmentCount ?? 0;
+        history.push({
+          role: 'system',
+          content: `[SYSTEM] Current harassment_count for this customer: ${harassmentCount}`,
+        });
+
+        return wApiAgent.run({
+          userMessage: ctx.steps.receive.message,
+          preprocessedQuery: ctx.steps.preprocess.cleanedEnglishQuery,
+          detectedLanguage: ctx.steps.preprocess.detectedLanguage,
+          context: ctx.steps["retrieve-context"].chunks,
+          conversationHistory: history,
+          businessName: ctx.input.businessName,
+          businessVertical: ctx.input.businessVertical,
+        });
+      },
     },
     {
       name: "score",
       fn: async (ctx) => {
-        const jsonMatch = ctx.steps.infer.text.match(/\{[\s\S]*\}/);
-        return jsonMatch
-          ? JSON.parse(jsonMatch[0])
-          : { confidence: 0.20, intent_score: 0.50, estimated_value: 0 };
+        const rawResponse = ctx.steps.infer.text;
+        const decision = parseAgentResponse(rawResponse);
+        return decision;
       },
     },
     {
       name: "route",
-      fn: async (ctx) => ({
-        action: ctx.steps.score.confidence >= (ctx.input.confidenceThreshold ?? 0.75) ? "answer" : "escalate",
-        reply: ctx.steps.infer.text
-          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, "")
-          .replace(/\{[\s\S]*\}/, "")
-          .trim(),
-      }),
+      fn: async (ctx) => {
+        const decision = ctx.steps.score;
+        return {
+          action: decision.action,
+          reply: decision.reply,
+          escalate_reason: decision.escalate_reason,
+        };
+      },
     },
     {
       name: "persist",
       fn: async (ctx) => {
-        await wApiAgent.datastore.upsert("conversations", {
-          business_id: ctx.steps.receive.businessId,
-          customer_id: ctx.steps.receive.customerId,
-          intent_score: ctx.steps.score.intent_score,
-          estimated_value: ctx.steps.score.estimated_value,
-          status: ctx.steps.route.action === "escalate" ? "escalated" : "open",
-          last_message_at: new Date().toISOString(),
-        });
+        try {
+          const updateObj: any = {
+            business_id: ctx.steps.receive.businessId,
+            customer_id: ctx.steps.receive.customerId,
+            intent_score: ctx.steps.score.intent_score,
+            estimated_value: ctx.steps.score.estimated_value,
+            status: ctx.steps.route.action === "escalate" ? "escalated" : "open",
+            last_message_at: new Date().toISOString(),
+          };
+          if (ctx.steps.route.action === "escalate" && ctx.steps.route.escalate_reason) {
+            updateObj.escalation_reason = ctx.steps.route.escalate_reason;
+          }
+          await wApiAgent.datastore.upsert("conversations", updateObj);
+        } catch (err) {
+          console.warn("Failed to persist with escalation_reason, retrying without it:", err);
+          await wApiAgent.datastore.upsert("conversations", {
+            business_id: ctx.steps.receive.businessId,
+            customer_id: ctx.steps.receive.customerId,
+            intent_score: ctx.steps.score.intent_score,
+            estimated_value: ctx.steps.score.estimated_value,
+            status: ctx.steps.route.action === "escalate" ? "escalated" : "open",
+            last_message_at: new Date().toISOString(),
+          });
+        }
       },
     },
   ],

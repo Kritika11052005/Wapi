@@ -120,13 +120,17 @@ export class LemmaAgent {
     context: any[];
     conversationHistory: any[];
     businessName: string;
+    businessVertical?: string;
   }): Promise<{ text: string }> {
     if (!genAI) {
       throw new Error("Gemini API Key not configured");
     }
 
     const businessName = input.businessName || "the business";
-    const formattedSysPrompt = this.systemPrompt.replace(/{business_name}/g, businessName);
+    const businessVertical = input.businessVertical || "business";
+    const formattedSysPrompt = this.systemPrompt
+      .replace(/{business_name}/g, businessName)
+      .replace(/{business_vertical}/g, businessVertical);
 
     const contextStr = input.context && input.context.length > 0
       ? input.context.map((c, i) => `[Doc ${i + 1}]: ${c.content}`).join("\n\n")

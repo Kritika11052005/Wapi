@@ -1,3 +1,5 @@
+/* eslint-disable react-hooks/immutability */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect, useRef } from "react";
@@ -5,18 +7,18 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/client";
-import { 
-  MessageSquare, 
-  Bot, 
-  Clock, 
-  TrendingUp, 
-  ShieldAlert, 
-  CheckCircle2, 
-  Send, 
-  Settings, 
-  LogOut, 
-  Loader2, 
-  Search, 
+import {
+  MessageSquare,
+  Bot,
+  Clock,
+  TrendingUp,
+  ShieldAlert,
+  CheckCircle2,
+  Send,
+  Settings,
+  LogOut,
+  Loader2,
+  Search,
   AlertCircle,
   HelpCircle
 } from "lucide-react";
@@ -27,29 +29,30 @@ export default function Dashboard() {
 
   const [loading, setLoading] = useState(true);
   const [business, setBusiness] = useState<any>(null);
-  
+
   // Conversations and messages state
   const [conversations, setConversations] = useState<any[]>([]);
   const [selectedConv, setSelectedConv] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
-  
+
   // Message composition & nudge state
   const [replyText, setReplyText] = useState("");
   const [sendingReply, setSendingReply] = useState(false);
   const [activeNudge, setActiveNudge] = useState<any>(null);
   const [nudgeDraft, setNudgeDraft] = useState("");
   const [loadingNudge, setLoadingNudge] = useState(false);
-  
+
   // UI filter & search states
   const [filter, setFilter] = useState("all"); // 'all' | 'open' | 'escalated' | 'stale' | 'resolved'
   const [search, setSearch] = useState("");
-  
+
   // Metrics
   const [metrics, setMetrics] = useState({
     active: 0,
     autoHandled: 0,
     escalated: 0,
     stale: 0,
+    blocked: 0,
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -153,15 +156,16 @@ export default function Dashboard() {
       if (error) throw error;
 
       const convs = data || [];
-      
+
       // Calculate metrics from all conversations
-      const active = convs.filter(c => c.status !== "resolved").length;
+      const active = convs.filter(c => c.status !== "resolved" && c.status !== "blocked").length;
       const autoHandled = convs.filter(c => c.status === "open" && !c.is_stale).length;
       const escalated = convs.filter(c => c.status === "escalated").length;
-      const stale = convs.filter(c => c.is_stale).length;
+      const stale = convs.filter(c => c.is_stale && c.status !== "resolved" && c.status !== "blocked").length;
+      const blocked = convs.filter(c => c.status === "blocked").length;
 
-      setMetrics({ active, autoHandled, escalated, stale });
-      
+      setMetrics({ active, autoHandled, escalated, stale, blocked });
+
       // Sort priority: intent_score * estimated_value DESC, last_message_at DESC
       const sortedConvs = [...convs].sort((a, b) => {
         const valA = parseFloat(a.intent_score || "0") * parseFloat(a.estimated_value || "0");
@@ -190,7 +194,7 @@ export default function Dashboard() {
     setMessages([]);
     setActiveNudge(null);
     setNudgeDraft("");
-    
+
     // Fetch message history
     const { data: msgs, error } = await supabase
       .from("messages")
@@ -305,6 +309,28 @@ export default function Dashboard() {
     }
   };
 
+  // Unblock customer
+  const unblockCustomer = async () => {
+    if (!selectedConv || !business) return;
+
+    try {
+      const response = await fetch(`/api/conversations/${selectedConv.id}/unblock`, {
+        method: "PATCH",
+      });
+
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Failed to unblock customer");
+
+      // Unselect and refresh
+      setSelectedConv(null);
+      setMessages([]);
+      await fetchConversations(business.id, false);
+      alert("Customer successfully unblocked!");
+    } catch (err: any) {
+      alert(err.message || "Failed to unblock customer.");
+    }
+  };
+
   // Submit/Send Stale Lead Nudge
   const handleSendNudge = async () => {
     if (!selectedConv || !nudgeDraft.trim()) return;
@@ -376,18 +402,19 @@ export default function Dashboard() {
     // Search filter
     const phone = c.customers?.phone || "";
     const name = c.customers?.display_name || "";
-    const matchesSearch = 
-      phone.toLowerCase().includes(search.toLowerCase()) || 
+    const matchesSearch =
+      phone.toLowerCase().includes(search.toLowerCase()) ||
       name.toLowerCase().includes(search.toLowerCase());
 
     if (!matchesSearch) return false;
 
     // Status filter
-    if (filter === "all") return c.status !== "resolved";
+    if (filter === "all") return c.status !== "resolved" && c.status !== "blocked";
     if (filter === "open") return c.status === "open" && !c.is_stale;
     if (filter === "escalated") return c.status === "escalated";
-    if (filter === "stale") return c.is_stale && c.status !== "resolved";
+    if (filter === "stale") return c.is_stale && c.status !== "resolved" && c.status !== "blocked";
     if (filter === "resolved") return c.status === "resolved";
+    if (filter === "blocked") return c.status === "blocked";
 
     return true;
   });
@@ -411,11 +438,11 @@ export default function Dashboard() {
       <header className="relative border-b border-slate-900 bg-slate-950/80 backdrop-blur-md px-6 py-4 flex items-center justify-between shrink-0 z-10">
         <div className="flex items-center gap-3">
           <div className="relative bg-slate-900 p-1.5 rounded-lg border border-slate-850">
-            <Image 
-              src="/logo.png" 
-              alt="Wapi Logo" 
-              width={26} 
-              height={26} 
+            <Image
+              src="/logo.png"
+              alt="Wapi Logo"
+              width={26}
+              height={26}
               className="rounded"
             />
           </div>
@@ -426,15 +453,15 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-4">
-          <Link 
-            href="/settings" 
+          <Link
+            href="/settings"
             className="p-2 rounded-lg border border-slate-900 hover:bg-slate-900 text-slate-400 hover:text-white transition-all"
             title="Settings"
           >
             <Settings className="w-4 h-4" />
           </Link>
-          <button 
-            onClick={handleSignOut} 
+          <button
+            onClick={handleSignOut}
             className="p-2 rounded-lg border border-slate-900 hover:bg-rose-950/30 hover:border-rose-900/50 text-slate-400 hover:text-rose-400 transition-all cursor-pointer"
             title="Sign Out"
           >
@@ -445,44 +472,40 @@ export default function Dashboard() {
 
       {/* WORKSPACE LAYOUT */}
       <div className="flex flex-1 overflow-hidden relative z-10">
-        
+
         {/* LEFT PANEL: LIST & METRICS */}
         <aside className="w-full md:w-[380px] lg:w-[420px] border-r border-slate-900 flex flex-col shrink-0 overflow-hidden bg-slate-950/50">
-          
+
           {/* STAT STRIP METRICS */}
           <div className="grid grid-cols-4 gap-2 p-4 border-b border-slate-900 shrink-0">
-            <button 
+            <button
               onClick={() => setFilter("all")}
-              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                filter === "all" ? "bg-slate-900 border-slate-800" : "bg-transparent border-transparent hover:bg-slate-900/20"
-              }`}
+              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${filter === "all" ? "bg-slate-900 border-slate-800" : "bg-transparent border-transparent hover:bg-slate-900/20"
+                }`}
             >
               <span className="text-xl font-bold text-white">{metrics.active}</span>
               <span className="text-[9px] uppercase tracking-wider text-slate-500 font-bold">Active</span>
             </button>
-            <button 
+            <button
               onClick={() => setFilter("open")}
-              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                filter === "open" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
-              }`}
+              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${filter === "open" ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
+                }`}
             >
               <span className="text-xl font-bold">{metrics.autoHandled}</span>
               <span className="text-[9px] uppercase tracking-wider text-slate-500 font-bold">Auto</span>
             </button>
-            <button 
+            <button
               onClick={() => setFilter("escalated")}
-              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                filter === "escalated" ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
-              }`}
+              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${filter === "escalated" ? "bg-amber-500/10 border-amber-500/20 text-amber-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
+                }`}
             >
               <span className="text-xl font-bold">{metrics.escalated}</span>
               <span className="text-[9px] uppercase tracking-wider text-slate-500 font-bold">Alerts</span>
             </button>
-            <button 
+            <button
               onClick={() => setFilter("stale")}
-              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${
-                filter === "stale" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
-              }`}
+              className={`p-2 rounded-xl border flex flex-col items-center justify-center transition-all ${filter === "stale" ? "bg-rose-500/10 border-rose-500/20 text-rose-400" : "bg-transparent border-transparent hover:bg-slate-900/20"
+                }`}
             >
               <span className="text-xl font-bold">{metrics.stale}</span>
               <span className="text-[9px] uppercase tracking-wider text-slate-500 font-bold">Stale</span>
@@ -501,17 +524,16 @@ export default function Dashboard() {
                 className="w-full pl-9 pr-4 py-2.5 rounded-lg bg-slate-950 border border-slate-900 text-xs text-slate-100 placeholder:text-slate-700 focus:outline-none focus:border-emerald-500 transition-colors"
               />
             </div>
-            
+
             <div className="flex gap-1.5 overflow-x-auto text-[10px] uppercase font-bold tracking-wider text-slate-400">
-              {["all", "open", "escalated", "stale", "resolved"].map((f) => (
+              {["all", "open", "escalated", "stale", "resolved", "blocked"].map((f) => (
                 <button
                   key={f}
                   onClick={() => setFilter(f)}
-                  className={`px-3 py-1.5 rounded-full border transition-all shrink-0 cursor-pointer ${
-                    filter === f 
-                      ? "bg-slate-900 border-slate-800 text-white" 
+                  className={`px-3 py-1.5 rounded-full border transition-all shrink-0 cursor-pointer ${filter === f
+                      ? "bg-slate-900 border-slate-800 text-white"
                       : "bg-transparent border-transparent hover:bg-slate-900/30"
-                  }`}
+                    }`}
                 >
                   {f}
                 </button>
@@ -531,18 +553,17 @@ export default function Dashboard() {
                 const isSelected = selectedConv?.id === conv.id;
                 const scoreValue = parseFloat(conv.intent_score || "0") * parseFloat(conv.estimated_value || "0");
                 const lastMsgTime = new Date(conv.last_message_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                
+
                 return (
                   <div
                     key={conv.id}
                     onClick={() => selectConversation(conv)}
-                    className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 relative ${
-                      isSelected
+                    className={`p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 relative ${isSelected
                         ? "bg-slate-900/60 border-emerald-500/30 shadow-[0_0_15px_rgba(16,185,129,0.03)]"
-                        : conv.is_stale 
+                        : conv.is_stale
                           ? "bg-rose-950/10 border-rose-900/20 hover:border-rose-900/40"
                           : "bg-slate-900/20 border-slate-900 hover:border-slate-800"
-                    }`}
+                      }`}
                   >
                     {/* Header */}
                     <div className="flex justify-between items-start gap-2">
@@ -554,15 +575,14 @@ export default function Dashboard() {
                           {conv.customers?.display_name || "WhatsApp Customer"}
                         </span>
                       </div>
-                      
+
                       {/* Value & Status Badges */}
                       <div className="flex flex-col items-end gap-1">
                         {parseFloat(conv.estimated_value) > 0 && (
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${
-                            parseFloat(conv.estimated_value) >= 5000 
-                              ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-extrabold" 
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded font-mono ${parseFloat(conv.estimated_value) >= 5000
+                              ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-slate-950 font-extrabold"
                               : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                          }`}>
+                            }`}>
                             ₹{Math.round(conv.estimated_value)}
                           </span>
                         )}
@@ -573,6 +593,11 @@ export default function Dashboard() {
                     {/* Status markers */}
                     <div className="flex items-center justify-between gap-4 mt-1">
                       <div className="flex items-center gap-1.5">
+                        {conv.status === "blocked" && (
+                          <span className="text-[9px] font-semibold text-[#ff6b6b] bg-[#1a0a0a] px-1.5 py-0.2 rounded border border-[#ff6b6b]/30">
+                            🚫 BLOCKED
+                          </span>
+                        )}
                         {conv.status === "escalated" && (
                           <span className="text-[9px] font-semibold text-amber-400 bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/20">
                             ESCALATED
@@ -594,8 +619,8 @@ export default function Dashboard() {
                       <div className="flex items-center gap-1.5 shrink-0">
                         <span className="text-[8px] font-mono text-slate-500">Intent: {Math.round((conv.intent_score || 0) * 100)}%</span>
                         <div className="w-12 h-1 bg-slate-900 rounded-full overflow-hidden">
-                          <div 
-                            className="bg-emerald-400 h-full" 
+                          <div
+                            className="bg-emerald-400 h-full"
                             style={{ width: `${(conv.intent_score || 0) * 100}%` }}
                           />
                         </div>
@@ -610,10 +635,10 @@ export default function Dashboard() {
 
         {/* RIGHT PANEL: CONVERSATION PANEL */}
         <main className="flex-1 flex flex-col overflow-hidden bg-slate-950">
-          
+
           {selectedConv ? (
             <div className="flex-1 flex flex-col overflow-hidden h-full">
-              
+
               {/* Conversation Header */}
               <div className="border-b border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center justify-between shrink-0">
                 <div className="flex flex-col">
@@ -625,7 +650,15 @@ export default function Dashboard() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {selectedConv.status !== "resolved" && (
+                  {selectedConv.status === "blocked" && (
+                    <button
+                      onClick={unblockCustomer}
+                      className="px-4 py-2 rounded-lg bg-red-950/20 border border-red-900/30 hover:bg-red-900/10 text-xs font-semibold text-red-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      🚫 Unblock Customer
+                    </button>
+                  )}
+                  {selectedConv.status !== "resolved" && selectedConv.status !== "blocked" && (
                     <button
                       onClick={resolveConversation}
                       className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-xs font-semibold text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -647,29 +680,27 @@ export default function Dashboard() {
                     const isCustomer = m.role === "customer";
                     const isOwner = m.role === "owner";
                     const isEscalation = m.role === "escalation";
-                    
+
                     return (
-                      <div 
-                        key={m.id} 
-                        className={`flex flex-col max-w-[70%] ${
-                          isCustomer ? "mr-auto items-start" : "ml-auto items-end"
-                        }`}
+                      <div
+                        key={m.id}
+                        className={`flex flex-col max-w-[70%] ${isCustomer ? "mr-auto items-start" : "ml-auto items-end"
+                          }`}
                       >
                         {/* Bubble */}
-                        <div 
-                          className={`p-4 rounded-2xl text-sm leading-relaxed ${
-                            isCustomer 
+                        <div
+                          className={`p-4 rounded-2xl text-sm leading-relaxed ${isCustomer
                               ? "bg-slate-900 border border-slate-850 text-slate-100 rounded-tl-sm"
                               : isOwner
                                 ? "bg-slate-100 text-slate-950 font-medium rounded-tr-sm"
                                 : isEscalation
                                   ? "bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-tr-sm"
                                   : "bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 rounded-tr-sm"
-                          }`}
+                            }`}
                         >
                           <p>{m.content}</p>
                         </div>
-                        
+
                         {/* Meta */}
                         <span className="text-[9px] font-mono text-slate-600 mt-1 uppercase tracking-wider">
                           {isCustomer ? "Customer" : isOwner ? "You" : isEscalation ? "Escalation Alert" : "Wapi Agent"}
@@ -691,7 +722,7 @@ export default function Dashboard() {
                       <span className="text-xs font-bold text-rose-400">⚠️ Stale Lead Warning (Went quiet for 2+ hours)</span>
                     </div>
                     <div className="flex items-center gap-3">
-                      <button 
+                      <button
                         onClick={handleDismissNudge}
                         className="text-[10px] uppercase font-bold text-slate-500 hover:text-slate-300 transition-colors"
                       >
@@ -709,6 +740,7 @@ export default function Dashboard() {
                     ) : (
                       <div className="flex gap-2">
                         <textarea
+                          aria-label="text"
                           rows={2}
                           value={nudgeDraft}
                           onChange={(e) => setNudgeDraft(e.target.value)}
@@ -729,8 +761,8 @@ export default function Dashboard() {
 
               {/* MANUAL REPLY COMPOSER */}
               {selectedConv.status !== "resolved" && (
-                <form 
-                  onSubmit={handleSendReply} 
+                <form
+                  onSubmit={handleSendReply}
                   className="border-t border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center gap-3 shrink-0"
                 >
                   <textarea

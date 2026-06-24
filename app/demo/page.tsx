@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect, useRef } from "react";
@@ -10,7 +11,6 @@ import {
   Sparkles,
   Clock,
   Database,
-  ArrowLeft,
   Send,
   Smartphone,
   ChevronRight,
@@ -23,8 +23,7 @@ import {
   Eye,
   Sliders,
   Building,
-  RefreshCw,
-  Mic
+  RefreshCw
 } from "lucide-react";
 
 interface Message {
@@ -44,7 +43,7 @@ interface Conversation {
   time: string;
   value: number;
   intent: number;
-  status: "open" | "auto-handled" | "escalated" | "stale";
+  status: "open" | "auto-handled" | "escalated" | "stale" | "blocked";
 }
 
 interface PresetQuery {
@@ -188,8 +187,8 @@ const TEMPLATES = [
 ];
 
 function getInitialInboxForTemplate(
-  templateId: string, 
-  businessName: string, 
+  templateId: string,
+  businessName: string,
   businessType: string,
   presets: PresetQuery[]
 ): Conversation[] {
@@ -222,7 +221,7 @@ function getInitialInboxForTemplate(
     card2Value = 2000;
     card2Intent = 0.75;
 
-     card3Phone = "+91 91234 56789";
+    card3Phone = "+91 91234 56789";
     card3Message = presets[0]?.text || "kaha hai tumhara shop?";
     card3Value = 0;
     card3Intent = 0.4;
@@ -260,7 +259,7 @@ function getInitialInboxForTemplate(
     // Custom business or customized templates
     card2Phone = "+91 99000 88000";
     card2Message = presets[2]?.text || presets[1]?.text || `I want to check rates for ${businessType}`;
-    
+
     // Try to extract value from dynamic presets
     let extractedVal = 1500;
     presets.forEach(p => {
@@ -332,6 +331,13 @@ export default function DemoPage() {
   const [businessType, setBusinessType] = useState("Beauty Salon");
   const [knowledgeText, setKnowledgeText] = useState(TEMPLATES[0].knowledge);
 
+  // ── Guard Pipeline State (in-memory, mirrors DB columns) ──
+  const [guardHarassmentCount, setGuardHarassmentCount] = useState(0);
+  const [guardIsBlocked, setGuardIsBlocked] = useState(false);
+  const [guardLastMessageHash, setGuardLastMessageHash] = useState<string | null>(null);
+  const [guardRepeatCount, setGuardRepeatCount] = useState(0);
+  const [guardLastRepeatAt, setGuardLastRepeatAt] = useState<string | null>(null);
+
   // Speech Recognition / MediaRecorder States
   const [isListening, setIsListening] = useState(false);
   const [recognitionSupported, setRecognitionSupported] = useState(true);
@@ -372,13 +378,13 @@ export default function DemoPage() {
         const durationStr = `${m}:${s < 10 ? '0' : ''}${s}`;
 
         const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType });
-        
+
         // Convert blob to base64
         const reader = new FileReader();
         reader.readAsDataURL(audioBlob);
         reader.onloadend = async () => {
           const base64Data = (reader.result as string).split(",")[1];
-          
+
           try {
             await handleSendMessage(undefined, { base64: base64Data, mimeType: mediaRecorder.mimeType }, durationStr);
           } catch (err) {
@@ -440,10 +446,10 @@ export default function DemoPage() {
     setLoadingStepText("Parsing business profile & vertical...");
 
     const selectedTpl = TEMPLATES.find(t => t.id === setupTemplate);
-    const isModified = !selectedTpl || 
-                       setupBusinessName !== selectedTpl.name || 
-                       setupBusinessType !== selectedTpl.type || 
-                       setupKnowledgeText !== selectedTpl.knowledge;
+    const isModified = !selectedTpl ||
+      setupBusinessName !== selectedTpl.name ||
+      setupBusinessType !== selectedTpl.type ||
+      setupKnowledgeText !== selectedTpl.knowledge;
 
     let finalPresets = selectedTpl ? [...selectedTpl.presets] : [];
 
@@ -475,24 +481,24 @@ export default function DemoPage() {
           documentText: setupKnowledgeText
         })
       })
-      .then(res => res.json())
-      .then(data => {
-        if (data.presets && Array.isArray(data.presets)) {
-          const labels = ["🇮🇳 Hinglish", "🇮🇳 Marathi", "🇬🇧 Typos", "🇪🇸 Spanish", "💰 High Value"];
-          const newPresets = data.presets.slice(0, 5).map((q: string, idx: number) => ({
-            text: q,
-            label: labels[idx] || "Simulated Query"
-          }));
-          // Add a default gibberish query
-          newPresets.push({ text: "asdfghjklzxcvbnm", label: "⚠️ Gibberish" });
-          return newPresets;
-        }
-        return null;
-      })
-      .catch(err => {
-        console.error("Failed to generate dynamic presets:", err);
-        return null;
-      });
+        .then(res => res.json())
+        .then(data => {
+          if (data.presets && Array.isArray(data.presets)) {
+            const labels = ["🇮🇳 Hinglish", "🇮🇳 Marathi", "🇬🇧 Typos", "🇪🇸 Spanish", "💰 High Value"];
+            const newPresets = data.presets.slice(0, 5).map((q: string, idx: number) => ({
+              text: q,
+              label: labels[idx] || "Simulated Query"
+            }));
+            // Add a default gibberish query
+            newPresets.push({ text: "asdfghjklzxcvbnm", label: "⚠️ Gibberish" });
+            return newPresets;
+          }
+          return null;
+        })
+        .catch(err => {
+          console.error("Failed to generate dynamic presets:", err);
+          return null;
+        });
     }
 
     const [apiPresetsResult] = await Promise.all([
@@ -547,6 +553,13 @@ export default function DemoPage() {
     setPipelineLogs(null);
     setActiveTab("pipeline");
 
+    // Reset guard state on new sandbox
+    setGuardHarassmentCount(0);
+    setGuardIsBlocked(false);
+    setGuardLastMessageHash(null);
+    setGuardRepeatCount(0);
+    setGuardLastRepeatAt(null);
+
     setIsLoading(false);
     setIsSetupComplete(true);
   };
@@ -591,7 +604,13 @@ export default function DemoPage() {
         })),
         documentText: knowledgeText,
         businessName,
-        businessType
+        businessType,
+        // Pass guard state to API
+        harassmentCount: guardHarassmentCount,
+        isBlocked: guardIsBlocked,
+        lastMessageHash: guardLastMessageHash,
+        repeatCount: guardRepeatCount,
+        lastRepeatAt: guardLastRepeatAt,
       };
 
       if (isVoice && audioData) {
@@ -614,7 +633,7 @@ export default function DemoPage() {
 
       if (data.error) {
         if (isVoice) {
-          setChatHistory((prev) => 
+          setChatHistory((prev) =>
             prev.map((msg) => {
               if (msg.isVoiceNote && msg.transcribing) {
                 return {
@@ -641,7 +660,7 @@ export default function DemoPage() {
 
       // If voice note succeeded, update its transcription
       if (isVoice && data.transcription) {
-        setChatHistory((prev) => 
+        setChatHistory((prev) =>
           prev.map((msg) => {
             if (msg.isVoiceNote && msg.transcribing) {
               return {
@@ -656,22 +675,111 @@ export default function DemoPage() {
         );
       }
 
-      // Add AI Response or Escalation note
-      if (data.response === "ESCALATE" || data.status === "escalated") {
+      // ── Update guard state from API response ──
+      if (data.newHarassmentCount !== undefined) setGuardHarassmentCount(data.newHarassmentCount);
+      if (data.newIsBlocked !== undefined) setGuardIsBlocked(data.newIsBlocked);
+      if (data.newLastMessageHash !== undefined) setGuardLastMessageHash(data.newLastMessageHash);
+      if (data.newRepeatCount !== undefined) setGuardRepeatCount(data.newRepeatCount);
+      if (data.newLastRepeatAt !== undefined) setGuardLastRepeatAt(data.newLastRepeatAt);
+
+      // Handle blocked (Guard 1) — no response, just a system banner
+      if (data.guardAction === 'blocked') {
         setChatHistory((prev) => [
           ...prev,
           {
             sender: "system",
-            text: "⚠️ Conversation escalated to business owner due to low confidence or uncertain request.",
+            text: "🚫 This customer is blocked. Message ignored — no reply sent.",
             timestamp
           }
         ]);
-      } else {
+      }
+      // Handle repeat detection (Guard 2)
+      else if (data.guardAction?.startsWith('repeat_')) {
+        if (data.guardAction === 'repeat_ignore') {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "system",
+              text: "🔇 Repeat spam detected (4th+ time). Complete silence — no reply sent.",
+              timestamp
+            }
+          ]);
+        } else if (data.response) {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "agent",
+              text: data.response,
+              timestamp
+            }
+          ]);
+        }
+      }
+      // Handle emoji abuse (Guard 3)
+      else if (data.guardAction === 'emoji_abuse') {
+        if (data.response) {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "agent",
+              text: data.response,
+              timestamp
+            }
+          ]);
+        }
+        if (data.newIsBlocked) {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "system",
+              text: "🚫 Customer blocked after repeated emoji abuse.",
+              timestamp
+            }
+          ]);
+        }
+      }
+      // Handle Gemini-detected abuse
+      else if (data.guardAction === 'gemini_abuse') {
+        if (data.response) {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "agent",
+              text: data.response,
+              timestamp
+            }
+          ]);
+        }
+        if (data.newIsBlocked) {
+          setChatHistory((prev) => [
+            ...prev,
+            {
+              sender: "system",
+              text: "🚫 Customer blocked after repeated harassment. All future messages will be silently ignored.",
+              timestamp
+            }
+          ]);
+        }
+      }
+      // Normal AI response
+      else if (data.response && data.response !== "ESCALATE") {
         setChatHistory((prev) => [
           ...prev,
           {
             sender: "agent",
             text: data.response,
+            timestamp
+          }
+        ]);
+      }
+
+      // Add Escalation banner if escalated
+      if (data.status === "escalated" && !data.guardAction) {
+        setChatHistory((prev) => [
+          ...prev,
+          {
+            sender: "system",
+            text: "⚠️ Conversation escalated to business owner.",
             timestamp
           }
         ]);
@@ -686,13 +794,15 @@ export default function DemoPage() {
           if (conv.id === "conv-1") {
             return {
               ...conv,
-              lastMessage: data.response === "ESCALATE" 
-                ? "Escalated to owner" 
-                : (isVoice ? `🎤 ${data.transcription}` : data.response),
+              lastMessage: data.status === "blocked"
+                ? "🚫 Blocked"
+                : data.response === "ESCALATE"
+                  ? "Escalated to owner"
+                  : (isVoice ? `🎤 ${data.transcription}` : (data.response || conv.lastMessage)),
               time: "Just now",
-              value: data.evaluation.estimatedValue,
-              intent: data.evaluation.intentScore,
-              status: data.status
+              value: data.evaluation?.estimatedValue ?? conv.value,
+              intent: data.evaluation?.intentScore ?? conv.intent,
+              status: data.status === "blocked" ? "blocked" : data.status
             };
           }
           return conv;
@@ -820,7 +930,10 @@ export default function DemoPage() {
           <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Link href="/" className="p-1 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900 transition-all">
-                <ArrowLeft className="w-4 h-4" />
+                <svg width="20" height="20" className="w-5 h-5 shrink-0 fill-none stroke-current" style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="19" y1="12" x2="5" y2="12" />
+                  <polyline points="12 19 5 12 12 5" />
+                </svg>
               </Link>
               <div>
                 <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-400 bg-clip-text text-transparent">WAPI SANDBOX</span>
@@ -855,7 +968,7 @@ export default function DemoPage() {
                 ].map((step, idx) => {
                   let statusColor = "text-slate-650";
                   let indicator = <div className="w-1.5 h-1.5 rounded-full bg-slate-805" />;
-                  
+
                   if (loadingStep > idx) {
                     statusColor = "text-emerald-400/80 font-medium";
                     indicator = <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0" />;
@@ -863,7 +976,7 @@ export default function DemoPage() {
                     statusColor = "text-slate-200 font-semibold animate-pulse";
                     indicator = <div className="w-2 h-2 rounded-full bg-teal-400 animate-ping shrink-0" />;
                   }
-                  
+
                   return (
                     <div key={idx} className="flex items-center gap-3 text-xs">
                       <div className="w-5 h-5 flex items-center justify-center shrink-0">
@@ -906,11 +1019,10 @@ export default function DemoPage() {
                         setSetupBusinessType(tpl.type);
                         setSetupKnowledgeText(tpl.knowledge);
                       }}
-                      className={`px-3 py-2 rounded-xl text-xs font-semibold text-center border transition-all ${
-                        setupTemplate === tpl.id
+                      className={`px-3 py-2 rounded-xl text-xs font-semibold text-center border transition-all ${setupTemplate === tpl.id
                           ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400 shadow-sm"
                           : "bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200"
-                      }`}
+                        }`}
                     >
                       {tpl.label.split(" ")[0]}
                       <span className="block text-[9px] font-normal mt-0.5 opacity-80">
@@ -992,7 +1104,10 @@ export default function DemoPage() {
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Link href="/" className="p-1 rounded-lg border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-900 transition-all">
-              <ArrowLeft className="w-4 h-4" />
+              <svg width="20" height="20" className="w-5 h-5 shrink-0 fill-none stroke-current" style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="19" y1="12" x2="5" y2="12" />
+                <polyline points="12 19 5 12 12 5" />
+              </svg>
             </Link>
             <div>
               <span className="font-bold text-lg tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-blue-400 bg-clip-text text-transparent">WAPI SANDBOX</span>
@@ -1045,11 +1160,10 @@ export default function DemoPage() {
                   <button
                     key={idx}
                     onClick={() => handlePresetClick(preset.text)}
-                    className={`px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-805 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left ${
-                      isGibberish ? "hover:border-rose-500/50 hover:text-rose-400" : ""
-                    }`}
+                    className={`px-2.5 py-1 text-[11px] font-medium bg-slate-950 border border-slate-805 rounded-lg hover:border-emerald-500/50 hover:text-emerald-400 transition-all text-left ${isGibberish ? "hover:border-rose-500/50 hover:text-rose-400" : ""
+                      }`}
                   >
-                    {preset.label} "{preset.text.length > 50 ? preset.text.substring(0, 47) + '...' : preset.text}"
+                    {preset.label} &quot;{preset.text.length > 50 ? preset.text.substring(0, 47) + '...' : preset.text}&ldquo;
                   </button>
                 );
               })}
@@ -1057,7 +1171,7 @@ export default function DemoPage() {
           </div>
 
           {/* Mobile phone container */}
-          <div className="relative mx-auto w-full max-w-[370px] aspect-[9/18.5] bg-slate-950 border-[6px] border-slate-850 rounded-[40px] shadow-2xl overflow-hidden flex flex-col">
+          <div className="relative mx-auto w-full max-w-[370px] aspect-[9/18.5] bg-slate-950 border-[6px] border-slate-850 rounded-[40px] shadow-2xl overflow-hidden flex flex-col mt-6">
             {/* Phone Notch/Speaker */}
             <div className="absolute top-0 inset-x-0 h-5 bg-slate-950 flex justify-center items-center z-20">
               <div className="w-24 h-3.5 bg-black rounded-b-xl flex items-center justify-center">
@@ -1115,7 +1229,7 @@ export default function DemoPage() {
 
                 const isMe = msg.sender === "customer";
                 const isOwner = msg.sender === "owner";
-                
+
                 let bubbleClass = "max-w-[85%] rounded-2xl px-3 py-2 text-xs leading-relaxed ";
                 if (isMe) {
                   bubbleClass += "bg-[#0b5c46] text-white self-end rounded-tr-none";
@@ -1152,7 +1266,12 @@ export default function DemoPage() {
                           {/* Duration & Mic Status */}
                           <div className="flex flex-col items-end shrink-0">
                             <span className="text-[9px] text-emerald-300/80 font-mono">{msg.duration || "0:05"}</span>
-                            <Mic className="w-3.5 h-3.5 text-sky-400 mt-0.5" />
+                            <svg width="18" height="18" className="w-[18px] h-[18px] text-sky-400 mt-0.5 shrink-0 fill-none stroke-current" style={{ width: '18px', height: '18px' }} viewBox="0 0 24 24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                              <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                              <line x1="12" x2="12" y1="19" y2="22" />
+                              <line x1="8" x2="16" y1="22" y2="22" />
+                            </svg>
                           </div>
                         </div>
 
@@ -1166,7 +1285,7 @@ export default function DemoPage() {
                           ) : (
                             <div className="text-[10px] text-emerald-100/90 leading-relaxed font-sans">
                               <span className="font-mono text-[9px] text-emerald-300/75 uppercase tracking-wider block mb-0.5">Transcribed:</span>
-                              "{msg.transcriptionText}"
+                              &ldquo;{msg.transcriptionText}&ldquo;
                             </div>
                           )}
                         </div>
@@ -1212,14 +1331,18 @@ export default function DemoPage() {
               {recognitionSupported && (
                 <button
                   onClick={toggleListening}
-                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
-                    isListening
+                  className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${isListening
                       ? "bg-rose-500 text-white animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]"
                       : "bg-[#2a3942] text-slate-400 hover:text-white"
-                  }`}
+                    }`}
                   title={isListening ? "Stop listening" : "Start voice command"}
                 >
-                  <Mic className="w-4 h-4" />
+                  <svg width="20" height="20" className="w-5 h-5 shrink-0 fill-none stroke-current" style={{ width: '20px', height: '20px' }} viewBox="0 0 24 24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+                    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+                    <line x1="12" x2="12" y1="19" y2="22" />
+                    <line x1="8" x2="16" y1="22" y2="22" />
+                  </svg>
                 </button>
               )}
 
@@ -1233,6 +1356,7 @@ export default function DemoPage() {
                 disabled={isListening}
               />
               <button
+                aria-label="button"
                 onClick={() => handleSendMessage()}
                 disabled={!inputMessage.trim() || isListening}
                 className="w-8 h-8 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center hover:brightness-110 active:scale-95 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
@@ -1251,7 +1375,7 @@ export default function DemoPage() {
               2. Wapi AI Operator Portal
             </h2>
             <p className="text-xs text-slate-400">
-              Monitor the AI's internal reasoning, prioritize leads, and view the live vector retrieval outputs.
+              Monitor the AI&apos;s internal reasoning, prioritize leads, and view the live vector retrieval outputs.
             </p>
           </div>
 
@@ -1301,6 +1425,7 @@ export default function DemoPage() {
                 <div className="flex flex-col gap-2 bg-slate-950 p-3 rounded-lg border border-slate-900">
                   <label className="text-[10px] font-mono text-slate-500 uppercase">AI-Drafted Nudge message</label>
                   <textarea
+                    aria-label="text"
                     value={nudgeDraft}
                     onChange={(e) => setNudgeDraft(e.target.value)}
                     rows={2}
@@ -1329,31 +1454,28 @@ export default function DemoPage() {
           <div className="flex border-b border-slate-900 bg-slate-900/20 rounded-xl p-1 shrink-0">
             <button
               onClick={() => setActiveTab("pipeline")}
-              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-                activeTab === "pipeline"
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "pipeline"
                   ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
                   : "text-slate-400 hover:text-slate-200"
-              }`}
+                }`}
             >
               <Bot className="w-4 h-4" /> Pipeline Inspector
             </button>
             <button
               onClick={() => setActiveTab("inbox")}
-              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-                activeTab === "inbox"
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "inbox"
                   ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
                   : "text-slate-400 hover:text-slate-200"
-              }`}
+                }`}
             >
               <MessageSquare className="w-4 h-4" /> CRM Queue Inbox
             </button>
             <button
               onClick={() => setActiveTab("knowledge")}
-              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${
-                activeTab === "knowledge"
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "knowledge"
                   ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
                   : "text-slate-400 hover:text-slate-200"
-              }`}
+                }`}
             >
               <Database className="w-4 h-4" /> Custom Knowledge
             </button>
@@ -1425,14 +1547,14 @@ export default function DemoPage() {
                           gemini-embedding-001 (768d)
                         </span>
                       </div>
-                      
+
                       {pipelineLogs.preprocessed.isGibberishOrNoise ? (
                         <p className="text-xs text-rose-400 bg-rose-500/5 p-3 border border-rose-500/10 rounded-lg">
                           Vector search skipped because query was flagged as gibberish/keysmash.
                         </p>
                       ) : pipelineLogs.retrievedChunks.length === 0 ? (
                         <p className="text-xs text-amber-400 bg-amber-500/5 p-3 border border-amber-500/10 rounded-lg">
-                          No matching context chunks found in knowledge base (similarity threshold &lt; 0.25).
+                          No matching context chunks found in knowledge base (similarity threshold &lt; 0.15).
                         </p>
                       ) : (
                         <div className="flex flex-col gap-2.5">
@@ -1444,7 +1566,7 @@ export default function DemoPage() {
                                   Similarity: {Math.round(chunk.similarity * 100)}%
                                 </span>
                               </div>
-                              <p className="text-slate-300 italic leading-relaxed">"{chunk.text}"</p>
+                              <p className="text-slate-300 italic leading-relaxed">&quot;{chunk.text}&qout;</p>
                             </div>
                           ))}
                         </div>
@@ -1459,7 +1581,7 @@ export default function DemoPage() {
                           gemini-3.5-flash
                         </span>
                       </div>
-                      
+
                       <div className="flex flex-col gap-3 bg-slate-950 p-4 rounded-lg border border-slate-900 text-xs">
                         <div className="grid grid-cols-2 gap-4 pb-3 border-b border-slate-900">
                           <div>
@@ -1467,7 +1589,7 @@ export default function DemoPage() {
                             <div className="flex items-center gap-2 mt-1">
                               <span className="font-bold text-slate-200 font-mono">{pipelineLogs.evaluation.intentScore}</span>
                               <div className="flex-1 h-1.5 bg-slate-900 rounded-full overflow-hidden max-w-[80px]">
-                                <div 
+                                <div
                                   className="h-full bg-emerald-500 rounded-full"
                                   style={{ width: `${pipelineLogs.evaluation.intentScore * 100}%` }}
                                 ></div>
@@ -1507,11 +1629,14 @@ export default function DemoPage() {
                 <div className="flex flex-col gap-3">
                   {inboxList.map((conv) => {
                     const isActive = conv.id === "conv-1";
-                    
+
                     let cardBorder = "border-slate-900 hover:border-slate-800 bg-slate-900/20";
                     let statusBadge = "";
-                    
-                    if (conv.status === "escalated") {
+
+                    if (conv.status === "blocked") {
+                      cardBorder = "border-red-500/30 hover:border-red-500/50 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.05)]";
+                      statusBadge = "bg-red-500/10 text-red-400 border border-red-500/20";
+                    } else if (conv.status === "escalated") {
                       cardBorder = "border-amber-500/20 hover:border-amber-500/40 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.02)]";
                       statusBadge = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
                     } else if (conv.status === "stale") {
@@ -1528,9 +1653,8 @@ export default function DemoPage() {
                     return (
                       <div
                         key={conv.id}
-                        className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all hover:scale-[1.01] ${cardBorder} ${
-                          isActive ? "ring-2 ring-emerald-500/30" : ""
-                        }`}
+                        className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all hover:scale-[1.01] ${cardBorder} ${isActive ? "ring-2 ring-emerald-500/30" : ""
+                          }`}
                       >
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
@@ -1541,11 +1665,11 @@ export default function DemoPage() {
                               </span>
                             )}
                             <span className={`text-[9px] font-mono uppercase px-2 py-0.2 rounded ${statusBadge}`}>
-                              {conv.status === "stale" ? "STALE LEAD" : conv.status}
+                              {conv.status === "blocked" ? "🚫 BLOCKED" : conv.status === "stale" ? "STALE LEAD" : conv.status}
                             </span>
                           </div>
-                          <p className="text-xs text-slate-400 truncate max-w-md">"{conv.lastMessage}"</p>
-                          
+                          <p className="text-xs text-slate-400 truncate max-w-md">&quot;{conv.lastMessage}&#34;</p>
+
                           {/* Intent indicator */}
                           <div className="flex items-center gap-2 mt-2">
                             <span className="text-[9px] text-slate-500 uppercase font-mono">Intent:</span>
@@ -1584,6 +1708,7 @@ export default function DemoPage() {
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] font-mono text-slate-500 uppercase">Business Name</label>
                       <input
+                        aria-label="input"
                         type="text"
                         value={businessName}
                         onChange={(e) => setBusinessName(e.target.value)}
@@ -1593,6 +1718,7 @@ export default function DemoPage() {
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] font-mono text-slate-500 uppercase">Vertical / Type</label>
                       <input
+                        aria-label="input"
                         type="text"
                         value={businessType}
                         onChange={(e) => setBusinessType(e.target.value)}
@@ -1607,6 +1733,7 @@ export default function DemoPage() {
                       <span className="text-[9px] text-emerald-400 font-normal">Supports markdown lists and prices</span>
                     </label>
                     <textarea
+                      aria-label="text"
                       value={knowledgeText}
                       onChange={(e) => setKnowledgeText(e.target.value)}
                       rows={12}

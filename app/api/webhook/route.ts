@@ -5,6 +5,19 @@ import { rateLimiters, applyRateLimit } from "@/lib/rate-limit";
 import { sanitiseMessageContent } from "@/lib/sanitise";
 import { messageHandlingWorkflow } from "@/lib/lemma/workflow";
 import { whatsappIntegration } from "@/lib/lemma/integrations";
+import { shouldNotifyOwner, getEscalationMessage } from "@/lib/agent/router";
+import {
+  getHarassmentResponse,
+  handleHarassmentEscalation,
+  isCustomerBlocked
+} from "@/lib/agent/harassment-handler";
+import { screenEmojis } from "@/lib/agent/emoji-screener";
+import {
+  hashMessage,
+  getRepeatAction,
+  getRepeatResponse,
+  isRapidSpam
+} from "@/lib/agent/repeat-detector";
 
 // GET handler: Webhook verification handshake
 export async function GET(request: Request) {
@@ -86,6 +99,21 @@ export async function POST(request: Request) {
     console.error("No business found in database. Please onboarding first.");
     return new Response("Business not found", { status: 404 });
   }
+
+  // ── BLOCK CHECK ──────────────────────────────────────────
+  // Must run before any agent processing
+  const blocked = await isCustomerBlocked(fromPhone, business.id);
+  if (blocked) {
+    // Customer is blocked — acknowledge Meta but send nothing to customer
+    console.log(JSON.stringify({
+      event: 'blocked_message_received',
+      phone: fromPhone,
+      businessId: business.id,
+      timestamp: new Date().toISOString()
+    }));
+    return new Response('OK', { status: 200 });
+  }
+  // ─────────────────────────────────────────────────────────
 
   const businessId = business.id;
   const businessName = business.name;
@@ -194,6 +222,92 @@ export async function POST(request: Request) {
     return new Response("Media message escalated", { status: 200 });
   }
 
+  // ═══════════════════════════════════════════════
+  // GUARD 2 — REPEAT/SPAM DETECTION
+  // Same message sent multiple times — no Gemini call
+  // ═══════════════════════════════════════════════
+  const businessVertical = business.vertical || "business";
+  const messageHash = hashMessage(sanitisedContent);
+
+  const { data: convGuardData } = await supabase
+    .from('conversations')
+    .select('last_message_hash, repeat_count, last_repeat_at, harassment_count')
+    .eq('id', conversation.id)
+    .single();
+
+  const isSameMessage = convGuardData?.last_message_hash === messageHash;
+  const newRepeatCount = isSameMessage ? (convGuardData?.repeat_count ?? 0) + 1 : 0;
+  const repeatAction = getRepeatAction(newRepeatCount);
+
+  // Update hash tracking
+  await supabase.from('conversations').update({
+    last_message_hash: messageHash,
+    repeat_count: isSameMessage ? newRepeatCount : 0,
+    last_repeat_at: isSameMessage ? new Date().toISOString() : null,
+  }).eq('id', conversation.id);
+
+  if (repeatAction !== 'normal') {
+    const repeatReply = getRepeatResponse(repeatAction, businessVertical);
+    if (repeatReply !== null) {
+      // Save repeat response as agent message
+      await supabase.from("messages").insert({
+        conversation_id: conversation.id,
+        business_id: businessId,
+        role: "agent",
+        content: repeatReply,
+        confidence_score: 1.0,
+        intent_score: 0,
+        estimated_value: 0,
+      });
+      await whatsappIntegration.send(fromPhone, repeatReply);
+    }
+    console.log(JSON.stringify({
+      event: 'repeat_detected',
+      count: newRepeatCount,
+      action: repeatAction,
+      rapidSpam: isRapidSpam(convGuardData?.last_repeat_at ?? null),
+      phone: fromPhone,
+      timestamp: new Date().toISOString()
+    }));
+    return new Response('OK', { status: 200 });
+    // ← Exits here. Gemini never called. Zero API cost.
+  }
+
+  // ═══════════════════════════════════════════════
+  // GUARD 3 — EMOJI PRE-SCREEN
+  // Obvious abuse caught before Gemini call
+  // ═══════════════════════════════════════════════
+  const emojiScreen = screenEmojis(sanitisedContent);
+
+  if (emojiScreen.isAbusive && emojiScreen.confidence >= 0.95) {
+    const currentEmojiCount = convGuardData?.harassment_count ?? 0;
+    const harassReply = getHarassmentResponse(currentEmojiCount);
+
+    if (harassReply !== null) {
+      await whatsappIntegration.send(fromPhone, harassReply);
+    }
+
+    await handleHarassmentEscalation(
+      fromPhone, businessId, conversation.id, currentEmojiCount, false
+    );
+
+    console.log(JSON.stringify({
+      event: 'emoji_abuse_blocked',
+      emojis: emojiScreen.offendingEmojis,
+      level: currentEmojiCount,
+      phone: fromPhone,
+      timestamp: new Date().toISOString()
+    }));
+    return new Response('OK', { status: 200 });
+    // ← Exits here. Gemini never called.
+  }
+
+  // ═══════════════════════════════════════════════
+  // GEMINI AGENT CALL
+  // Only genuine, non-spam, non-obvious-abuse messages reach here
+  // ═══════════════════════════════════════════════
+  const currentHarassmentCount = convGuardData?.harassment_count ?? 0;
+
   // 8. Fetch History for Context
   const { data: historyData } = await supabase
     .from("messages")
@@ -216,8 +330,10 @@ export async function POST(request: Request) {
       customerId: customer.id,
       businessId: businessId,
       businessName: businessName,
+      businessVertical: businessVertical,
       confidenceThreshold: threshold,
       history: mappedHistory,
+      harassmentCount: currentHarassmentCount,
     });
   } catch (workflowErr) {
     console.error("Lemma Workflow crashed. Falling back to escalation.");
@@ -243,25 +359,76 @@ export async function POST(request: Request) {
   }
 
   const { score, route } = workflowResult.steps;
-  const action = route.action; // 'answer' | 'escalate'
+  const action = route.action; // 'answer' | 'deflect' | 'escalate' | 'harassment' | 'silence'
   const generatedReply = route.reply;
+  const agentDecision = score;
+  const isThreat = agentDecision.escalate_reason === 'threat';
+
+  // ═══════════════════════════════════════════════
+  // ROUTE DECISION
+  // ═══════════════════════════════════════════════
+  if (action === 'harassment' || action === 'silence') {
+    // Gemini detected abuse (multilingual, contextual, subtle)
+    // Reuse harassment count already fetched during Guard 2
+    const harassReply = getHarassmentResponse(currentHarassmentCount);
+
+    if (harassReply !== null) {
+      await whatsappIntegration.send(fromPhone, harassReply);
+    }
+
+    await handleHarassmentEscalation(
+      fromPhone,
+      business.id,
+      conversation.id,
+      currentHarassmentCount,
+      isThreat
+    );
+
+    console.log(JSON.stringify({
+      event: 'harassment_handled',
+      level: currentHarassmentCount,
+      blocked: currentHarassmentCount >= 1,
+      threat: isThreat,
+      phone: fromPhone,
+      timestamp: new Date().toISOString()
+    }));
+
+    return new Response('OK', { status: 200 });
+  }
 
   // 10. Update Conversation Details in Database
+  const updateData: any = {
+    intent_score: score.intent_score,
+    estimated_value: score.estimated_value,
+    status: action === "escalate" ? "escalated" : "open",
+    is_stale: false, // Reset stale state on new message
+    last_message_at: new Date().toISOString(),
+  };
+
   await supabase
     .from("conversations")
-    .update({
-      intent_score: score.intent_score,
-      estimated_value: score.estimated_value,
-      status: action === "escalate" ? "escalated" : "open",
-      is_stale: false, // Reset stale state on new message
-      last_message_at: new Date().toISOString(),
-    })
+    .update(updateData)
     .eq("id", conversation.id);
+
+  // If genuinely escalated, save the escalation reason (wrapped in a try-catch for schema safety)
+  if (shouldNotifyOwner(score)) {
+    try {
+      await supabase
+        .from("conversations")
+        .update({
+          status: "escalated",
+          escalation_reason: score.escalate_reason,
+        })
+        .eq("id", conversation.id);
+    } catch (err) {
+      console.warn("Could not save escalation_reason (did you run the SQL migration?):", err);
+    }
+  }
 
   // 11. Save AI Response and send to user
   const finalRole = action === "escalate" ? "escalation" : "agent";
   const finalReplyText = action === "escalate"
-    ? `We received your request. Let me direct this to the owner of ${businessName} to assist you shortly.`
+    ? getEscalationMessage()
     : generatedReply;
 
   await supabase.from("messages").insert({
@@ -276,6 +443,19 @@ export async function POST(request: Request) {
 
   // Dispatch message via Meta API
   await whatsappIntegration.send(fromPhone, finalReplyText);
+
+  // Structured log for every decision
+  console.log(JSON.stringify({
+    event: 'agent_decision',
+    action: score.action,
+    confidence: score.confidence,
+    isAbusive: score.is_abusive ?? false,
+    abuseType: score.abuse_type ?? null,
+    escalate_reason: score.escalate_reason,
+    owner_notified: shouldNotifyOwner(score),
+    language: score.detected_language,
+    timestamp: new Date().toISOString()
+  }));
 
   return new Response("Success", { status: 200 });
 }

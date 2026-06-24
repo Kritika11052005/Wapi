@@ -1,5 +1,15 @@
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { preprocessCustomerMessage } from "@/lib/agent/preprocessor";
+import { parseAgentResponse, getEscalationMessage } from "@/lib/agent/router";
+import { getHarassmentResponse } from "@/lib/agent/harassment-handler";
+import { screenEmojis } from "@/lib/agent/emoji-screener";
+import {
+  hashMessage,
+  getRepeatAction,
+  getRepeatResponse,
+  isRapidSpam
+} from "@/lib/agent/repeat-detector";
 
 function cosineSimilarity(vecA: number[], vecB: number[]) {
   let dotProduct = 0;
@@ -18,13 +28,19 @@ export async function POST(request: Request) {
   try {
     const { 
       message, 
-      chatHistory, 
+      chatHistory = [], 
       documentText, 
       businessName, 
       businessType,
       audio,
       mimeType,
-      speechLanguage 
+      speechLanguage,
+      // Guard state passed from the demo page (in-memory state)
+      harassmentCount = 0,
+      isBlocked = false,
+      lastMessageHash = null,
+      repeatCount = 0,
+      lastRepeatAt = null,
     } = await request.json();
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -73,6 +89,27 @@ Do NOT include any markdown code blocks, backticks, or any text other than the J
       }
       const presets = JSON.parse(jsonMatch[0]);
       return NextResponse.json({ presets });
+    }
+
+    // ═══════════════════════════════════════════════
+    // GUARD 1 — BLOCK CHECK
+    // ═══════════════════════════════════════════════
+    if (isBlocked) {
+      return NextResponse.json({
+        preprocessed: { cleanedEnglishQuery: "", detectedLanguage: "N/A", isGibberishOrNoise: false },
+        retrievedChunks: [],
+        rawPrompt: "",
+        response: "",
+        evaluation: { confidence: 0, intentScore: 0, estimatedValue: 0 },
+        status: "blocked",
+        guardAction: "blocked",
+        guardMessage: null,
+        newHarassmentCount: harassmentCount,
+        newIsBlocked: true,
+        newLastMessageHash: lastMessageHash,
+        newRepeatCount: repeatCount,
+        newLastRepeatAt: lastRepeatAt,
+      });
     }
 
     let finalMessage = message || "";
@@ -140,6 +177,71 @@ Do NOT include any markdown code blocks, backticks, or any text other than the J
       finalMessage = transcribedText;
     }
 
+    // ═══════════════════════════════════════════════
+    // GUARD 2 — REPEAT/SPAM DETECTION
+    // ═══════════════════════════════════════════════
+    const currentHash = hashMessage(finalMessage);
+    const isSameMessage = lastMessageHash === currentHash;
+    const newRepeatCount = isSameMessage ? repeatCount + 1 : 0;
+    const repeatAction = getRepeatAction(newRepeatCount);
+
+    if (repeatAction !== 'normal') {
+      const repeatReply = getRepeatResponse(repeatAction, businessType || "business");
+      return NextResponse.json({
+        preprocessed: { cleanedEnglishQuery: finalMessage, detectedLanguage: "N/A", isGibberishOrNoise: false },
+        retrievedChunks: [],
+        rawPrompt: "",
+        response: repeatReply || "",
+        evaluation: { confidence: 1.0, intentScore: 0, estimatedValue: 0 },
+        status: repeatAction === 'ignore' ? 'ignored' : 'auto-replied',
+        guardAction: `repeat_${repeatAction}`,
+        guardMessage: repeatReply,
+        newHarassmentCount: harassmentCount,
+        newIsBlocked: false,
+        newLastMessageHash: currentHash,
+        newRepeatCount: newRepeatCount,
+        newLastRepeatAt: new Date().toISOString(),
+        transcription: transcribedText,
+      });
+    }
+
+    // ═══════════════════════════════════════════════
+    // GUARD 3 — EMOJI PRE-SCREEN
+    // ═══════════════════════════════════════════════
+    const emojiScreen = screenEmojis(finalMessage);
+
+    if (emojiScreen.isAbusive && emojiScreen.confidence >= 0.95) {
+      const harassReply = getHarassmentResponse(harassmentCount);
+      const newCount = harassmentCount + 1;
+      const shouldBlock = harassmentCount >= 1;
+
+      return NextResponse.json({
+        preprocessed: { cleanedEnglishQuery: finalMessage, detectedLanguage: "N/A", isGibberishOrNoise: false },
+        retrievedChunks: [],
+        rawPrompt: "",
+        response: harassReply || "",
+        evaluation: { confidence: 1.0, intentScore: 0, estimatedValue: 0 },
+        status: shouldBlock ? "blocked" : "auto-replied",
+        guardAction: "emoji_abuse",
+        guardMessage: harassReply,
+        emojiAbuse: {
+          detected: true,
+          offendingEmojis: emojiScreen.offendingEmojis,
+          confidence: emojiScreen.confidence,
+        },
+        newHarassmentCount: newCount,
+        newIsBlocked: shouldBlock,
+        newLastMessageHash: currentHash,
+        newRepeatCount: 0,
+        newLastRepeatAt: null,
+        transcription: transcribedText,
+      });
+    }
+
+    // ═══════════════════════════════════════════════
+    // GEMINI AGENT CALL
+    // Only genuine, non-spam, non-obvious-abuse messages reach here
+    // ═══════════════════════════════════════════════
     const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
     const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
 
@@ -184,8 +286,10 @@ Respond ONLY with the JSON block. Do not include markdown code block formatting 
 
       if (rawChunks.length > 0) {
         // Embed the query
+        const rawQuery = preprocessed.cleanedEnglishQuery || finalMessage;
+        const normalizedQuery = preprocessCustomerMessage(rawQuery);
         const queryEmbedResult = await embeddingModel.embedContent({
-          content: { role: "user", parts: [{ text: preprocessed.cleanedEnglishQuery }] },
+          content: { role: "user", parts: [{ text: normalizedQuery }] },
         });
         const queryVector = queryEmbedResult.embedding.values;
 
@@ -208,104 +312,213 @@ Respond ONLY with the JSON block. Do not include markdown code block formatting 
         // Sort by similarity descending and filter above threshold
         scoredChunks.sort((a, b) => b.similarity - a.similarity);
         retrievedChunks = scoredChunks
-          .filter((c) => c.similarity >= 0.25)
+          .filter((c) => c.similarity >= 0.15)
           .slice(0, 3);
       }
     }
 
     const contextText = retrievedChunks.map((c) => c.text).join("\n\n");
 
-    // Step 3: Inference
+    // Step 3: Inference & Scoring
     let aiResponse = "";
     let systemInstructions = "";
     let rawInferencePrompt = "";
+    let confidence = 1.0;
+    let intentScore = 0.5;
+    let estimatedValue = 0;
+    let finalStatus = "auto-replied";
+    let guardAction: string | null = null;
+    let newHarassmentCount = harassmentCount;
+    let newIsBlocked = false;
+
     if (preprocessed.isGibberishOrNoise) {
-      aiResponse = "ESCALATE";
+      aiResponse = getEscalationMessage();
+      confidence = 0.2;
+      intentScore = 0.5;
+      estimatedValue = 0;
+      finalStatus = "escalated";
     } else {
       const historyText = chatHistory
         .map((h: any) => `${h.sender === "customer" ? "Customer" : "Agent"}: ${h.text}`)
         .join("\n");
 
       systemInstructions = `
-You are an AI customer support agent for "${businessName}" (a ${businessType}).
-Your goal is to answer the customer's query using ONLY the retrieved facts below.
-If the answer cannot be found in the facts, or if you are unsure, respond ONLY with: ESCALATE
+You are a smart, warm, professional WhatsApp assistant for "${businessName}", 
+a ${businessType} in India.
 
-Rules:
-1. Do NOT make up facts. Stick strictly to the provided information.
-2. If the user's question is not answered by the facts, you MUST say: ESCALATE
-3. Respond in the customer's language (${preprocessed.detectedLanguage}). If Hinglish, respond in friendly Hinglish (Hindi written in Latin script). If Marathi, respond in Marathi. If Spanish, respond in Spanish.
-4. Keep the response polite, helpful, and concise (under 2-3 sentences).
-`;
+Your job: help genuine customers quickly, deflect irrelevant questions 
+gracefully, and protect the business from abuse — all without disturbing 
+the owner unless absolutely necessary.
 
-      rawInferencePrompt = `
-Retrieved facts:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 0 — ABUSE & HARASSMENT CHECK (runs first, always)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before doing anything else, scan the message for abuse.
+
+You understand abusive, offensive, and sexually explicit language in ALL 
+human languages and scripts including:
+  English, Hindi, Hinglish, Tamil, Telugu, Bengali, Marathi, Punjabi,
+  Gujarati, Kannada, Malayalam, Urdu, Bhojpuri, Odia, Assamese,
+  and their romanised/transliterated forms with intentional misspellings,
+  leet speak (3=e, 0=o, @=a, 1=i), asterisk-masking (b*tch, f**k),
+  phonetic variations, and abbreviations.
+
+You also understand abusive emoji usage:
+  - 🍆💦 or 🍆🍑💦 in any combination = always sexual harassment
+  - 🔞 sent to a business = always inappropriate  
+  - 👅🍆 or 🫦🍆 = always sexual
+  - Context matters for ambiguous emojis — evaluate with surrounding text
+  - Emojis combined with explicit text amplify the abuse classification
+
+ABUSE CLASSIFICATION:
+  Set is_abusive: true if the message contains ANY of:
+  - Sexual slurs, explicit sexual requests, or sexual solicitation
+  - Casteist, racist, communal, or religious slurs in ANY language
+  - Personal threats (physical, legal, reputational, or to property)
+  - Deeply offensive language even if cleverly disguised or misspelled
+  - Sexual emoji combinations listed above
+
+  Set abuse_type:
+  - "sexual"  → sexual content, explicit requests, sexual emojis
+  - "slur"    → casteist/racist/communal abuse
+  - "threat"  → any threat of harm to person or property
+  - "spam"    → deliberate nonsense or flooding
+  - null      → not abusive
+
+IF is_abusive = true:
+  Use the harassment_count provided below to determine level:
+  
+  COUNT 0 (first offense):
+    → Respond ONCE. Calm. Professional. Firm. No lecture. No apology.
+    → Under 2 sentences.
+    → Example: "We only offer professional ${businessType} services 
+       here. Happy to help if you have a genuine enquiry! 🙏"
+    → Set action: "harassment"
+  
+  COUNT 1 (second offense):
+    → Final warning. No warmth. No emoji.
+    → "This is a professional account. We will not be responding 
+       to this conversation further."
+    → Set action: "harassment"
+  
+  COUNT ≥ 2 (third offense and beyond):
+    → Send NOTHING. Absolute silence.
+    → Set action: "silence"
+  
+  THREAT EXCEPTION:
+    → Any physical/property threat → set action: "escalate" 
+      AND escalate_reason: "threat" regardless of count
+    → Owner must be notified immediately
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — RESPONSE DECISION (only if not abusive)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RULE 1 — ANSWER
+  When: Question is about our services, pricing, hours, location, 
+        policies AND the documents contain relevant info.
+  Do: Answer directly. Be warm. Offer to book if they seem interested.
+  
+RULE 2 — SOFT DEFLECT  
+  When: Question is about our services BUT documents don't have 
+        enough specific info.
+  Do: "I don't have exact details on that right now, but I can help 
+      with [2 things from docs]. Our team will follow up shortly!"
+  Do NOT escalate. Do NOT alert owner.
+
+RULE 3 — FRIENDLY OUT-OF-SCOPE
+  When: Question is completely unrelated to our business.
+  Do: Warm redirect. Light humour if appropriate.
+  Example: "Ha! We're a ${businessType}, not a restaurant 😄 
+            But if you're looking for our services, we'd love to help!"
+  Do NOT escalate. Do NOT alert owner. EVER.
+
+RULE 4 — ESCALATE (owner notified — use sparingly)
+  ONLY when:
+  a. Customer expresses anger/frustration ("why no reply", "been waiting", 
+     "worst service", "useless") — even subtle frustration counts
+  b. Customer explicitly asks for a human/owner/manager
+  c. Complaint, refund, cancellation dispute, or past transaction issue
+  d. Customer seems personally distressed or in urgent need
+  
+  When escalating:
+  → First send customer: "I'm connecting you with our team right away! 
+    They'll be with you shortly 🙏"
+  → Then flag for owner via dashboard
+  → Set escalate_reason: "anger"|"human_requested"|"complaint"|"transaction"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TONE & LANGUAGE RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Respond in the SAME LANGUAGE the customer used
+- Hindi, Hinglish, Tamil, Telugu — handle all naturally
+- Typos and bad grammar are NORMAL for Indian customers — never let them 
+  reduce your confidence in understanding the message
+- Match energy: casual message → casual reply. Formal → formal.
+- Under 100 words unless detail is genuinely needed
+- Use ₹ symbol always, never Rs or INR
+- Never say "I apologize for the inconvenience" or "Please be advised"
+- Be human. Be warm. Never robotic.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Business documents (services, pricing, policies):
 ${contextText || "No context retrieved."}
 
-Conversation History:
-${historyText || "No history."}
-Customer: ${finalMessage}
+Conversation history (last 10 messages, oldest first):
+${historyText || "No previous history."}
 
-Agent:`;
+Current harassment count for this customer: ${harassmentCount}
+
+Current message:
+${finalMessage}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+OUTPUT FORMAT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Write your reply to the customer first.
+Then on a NEW LINE add this JSON block — never show it to the customer:
+
+{"confidence": 0.0-1.0, "intent_score": 0.0-1.0, "estimated_value": number_in_INR, "action": "answer"|"deflect"|"escalate"|"harassment"|"silence", "escalate_reason": "anger"|"human_requested"|"complaint"|"transaction"|"threat"|null, "is_abusive": boolean, "abuse_type": "sexual"|"slur"|"threat"|"spam"|null, "abuse_confidence": 0.0-1.0, "emoji_abuse_detected": boolean, "offending_emojis": "string of offending emojis or null", "detected_language": "english"|"hindi"|"hinglish"|"tamil"|"telugu"|"bengali"|"marathi"|"other"}
+`;
+
+      rawInferencePrompt = `Current customer message: ${finalMessage}`;
 
       const inferenceResult = await model.generateContent({
         contents: [
-          { role: "user", parts: [{ text: `${systemInstructions}\n\n${rawInferencePrompt}` }] }
+          { role: "user", parts: [{ text: systemInstructions }] }
         ],
       });
-      aiResponse = inferenceResult.response.text().trim();
-    }
+      const rawText = inferenceResult.response.text().trim();
+      console.log("Demo inference raw text:", rawText);
 
-    // Step 4: Scoring and Gating
-    let confidence = 1.0;
-    let intentScore = 0.5;
-    let estimatedValue = 0;
+      // Parse the response using our unified router parser
+      const decision = parseAgentResponse(rawText);
 
-    if (aiResponse === "ESCALATE") {
-      confidence = 0.2;
-      intentScore = 0.8;
-      estimatedValue = 0;
-    } else {
-      const scorePrompt = `
-Analyze the customer's message and the AI's drafted response to evaluate lead metrics.
-Return a valid JSON object matching the schema below.
-
-Customer Query: "${finalMessage}"
-AI Response: "${aiResponse}"
-
-Rules:
-1. "intentScore" should be between 0.0 and 1.0, representing how likely they want to purchase or book a service (e.g. asking for prices/slots/bookings is 0.8+, general inquiries about location/timings is 0.3-0.5, greetings is 0.1).
-2. "estimatedValue" should be an estimate of the sale in Indian Rupees (₹) based on the services they are asking about. If they ask about standard hair styling (e.g. ₹500) set 500. If they ask about a package, guess its value. If no price is mentioned or they ask location/greetings, set 0.
-3. "confidence" is your confidence in the AI response (0.0 to 1.0). If the answer matches context well, set 0.95+.
-
-JSON Schema:
-{
-  "confidence": float,
-  "intentScore": float,
-  "estimatedValue": number
-}
-
-Respond ONLY with the JSON block. Do not include markdown code block formatting (like \`\`\`json).
-`;
-      const scoreResult = await model.generateContent(scorePrompt);
-      const scoreText = scoreResult.response.text().trim();
-      const scoreJsonMatch = scoreText.match(/\{[\s\S]*\}/);
-      if (scoreJsonMatch) {
-        try {
-          const scoreData = JSON.parse(scoreJsonMatch[0]);
-          confidence = scoreData.confidence ?? 1.0;
-          intentScore = scoreData.intentScore ?? 0.5;
-          estimatedValue = scoreData.estimatedValue ?? 0;
-        } catch (e) {
-          console.error("Error parsing score JSON:", e);
-        }
+      if (decision.action === "harassment" || decision.action === "silence") {
+        // Use our deterministic harassment response (not Gemini's)
+        const responseText = getHarassmentResponse(harassmentCount);
+        aiResponse = responseText || "";
+        confidence = decision.confidence;
+        intentScore = decision.intent_score;
+        estimatedValue = decision.estimated_value;
+        newHarassmentCount = harassmentCount + 1;
+        newIsBlocked = harassmentCount >= 1; // Block on 2nd+ offense
+        finalStatus = newIsBlocked ? "blocked" : "auto-replied";
+        guardAction = "gemini_abuse";
+      } else {
+        aiResponse = decision.action === "escalate" ? getEscalationMessage() : decision.reply;
+        confidence = decision.confidence;
+        intentScore = decision.intent_score;
+        estimatedValue = decision.estimated_value;
+        finalStatus = (decision.action === "escalate" || confidence < 0.70) ? "escalated" : "auto-replied";
       }
     }
-
-    const finalStatus =
-      preprocessed.isGibberishOrNoise || aiResponse === "ESCALATE" || confidence < 0.7
-        ? "escalated"
-        : "auto-replied";
 
     return NextResponse.json({
       preprocessed,
@@ -318,6 +531,12 @@ Respond ONLY with the JSON block. Do not include markdown code block formatting 
         estimatedValue,
       },
       status: finalStatus,
+      guardAction,
+      newHarassmentCount,
+      newIsBlocked,
+      newLastMessageHash: currentHash,
+      newRepeatCount: 0,
+      newLastRepeatAt: null,
       transcription: transcribedText,
     });
   } catch (error: any) {
