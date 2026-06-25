@@ -11,6 +11,11 @@ export interface AgentDecision {
   escalate_reason: EscalateReason
   harassment_count?: number
   detected_language: string
+  // New transaction fields
+  transaction_detected?: boolean
+  transaction_type?: 'appointment' | 'order' | 'subscription' | null
+  transaction_status?: 'collecting' | 'confirmed' | null
+  transaction_details?: any
 }
 
 // Valid reasons that justify notifying the owner
@@ -21,6 +26,62 @@ const VALID_ESCALATE_REASONS: EscalateReason[] = [
   'transaction',
   'threat'
 ]
+
+function normalizeTransactionDetails(details: any): any {
+  if (!details || typeof details !== 'object') return details;
+  
+  const normalized: any = {};
+  
+  // Mapping of fallback/alternative keys to standard keys
+  const keyMapping: { [key: string]: string } = {
+    // Orders
+    product_name: 'product',
+    productname: 'product',
+    item: 'product',
+    qty: 'quantity',
+    quantity: 'quantity',
+    delivery_address: 'address',
+    deliveryaddress: 'address',
+    address: 'address',
+    
+    // Appointments
+    service_name: 'service',
+    servicename: 'service',
+    service: 'service',
+    date: 'date',
+    time: 'time',
+    time_slot: 'time',
+    timeslot: 'time',
+    
+    // Subscriptions
+    plan_name: 'plan',
+    planname: 'plan',
+    plan: 'plan',
+    customer_email: 'email',
+    customeremail: 'email',
+    email: 'email',
+    
+    // General
+    customer_name: 'name',
+    customername: 'name',
+    name: 'name'
+  };
+
+  for (const [key, value] of Object.entries(details)) {
+    const lowerKey = key.toLowerCase().trim().replace(/[\s_-]+/g, '_');
+    const targetKey = keyMapping[lowerKey] || keyMapping[lowerKey.replace('_', '')] || key;
+    normalized[targetKey] = value;
+  }
+
+  if (normalized.hasOwnProperty('quantity')) {
+    const qtyNum = Number(normalized.quantity);
+    if (!isNaN(qtyNum)) {
+      normalized.quantity = qtyNum;
+    }
+  }
+  
+  return normalized;
+}
 
 export function parseAgentResponse(rawResponse: string): AgentDecision {
   // Extract the JSON block from the end of the response
@@ -39,7 +100,11 @@ export function parseAgentResponse(rawResponse: string): AgentDecision {
       estimated_value: 0,
       escalate_reason: 'complaint',
       harassment_count: 0,
-      detected_language: 'english'
+      detected_language: 'english',
+      transaction_detected: false,
+      transaction_type: null,
+      transaction_status: null,
+      transaction_details: null
     }
   }
 
@@ -51,6 +116,9 @@ export function parseAgentResponse(rawResponse: string): AgentDecision {
       .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
       .trim()
 
+    const rawDetails = parsed.transaction_details ?? parsed.transactionDetails ?? null;
+    const normalizedDetails = rawDetails ? normalizeTransactionDetails(rawDetails) : null;
+
     return {
       reply: cleanReply,
       action: parsed.action ?? 'deflect',
@@ -59,7 +127,11 @@ export function parseAgentResponse(rawResponse: string): AgentDecision {
       estimated_value: parsed.estimated_value ?? parsed.estimatedValue ?? 0,
       escalate_reason: parsed.escalate_reason ?? parsed.escalateReason ?? null,
       harassment_count: parsed.harassment_count ?? parsed.harassmentCount ?? 0,
-      detected_language: parsed.detected_language ?? parsed.detectedLanguage ?? 'english'
+      detected_language: parsed.detected_language ?? parsed.detectedLanguage ?? 'english',
+      transaction_detected: parsed.transaction_detected ?? parsed.transactionDetected ?? false,
+      transaction_type: parsed.transaction_type ?? parsed.transactionType ?? null,
+      transaction_status: parsed.transaction_status ?? parsed.transactionStatus ?? null,
+      transaction_details: normalizedDetails
     }
   } catch (e) {
     console.error("Failed to parse JSON match in agent response:", e)
@@ -71,7 +143,11 @@ export function parseAgentResponse(rawResponse: string): AgentDecision {
       estimated_value: 0,
       escalate_reason: 'complaint',
       harassment_count: 0,
-      detected_language: 'english'
+      detected_language: 'english',
+      transaction_detected: false,
+      transaction_type: null,
+      transaction_status: null,
+      transaction_details: null
     }
   }
 }

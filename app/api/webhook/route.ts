@@ -9,7 +9,8 @@ import { shouldNotifyOwner, getEscalationMessage } from "@/lib/agent/router";
 import {
   getHarassmentResponse,
   handleHarassmentEscalation,
-  isCustomerBlocked
+  isCustomerBlocked,
+  HARASSMENT_RESPONSES
 } from "@/lib/agent/harassment-handler";
 import { screenEmojis } from "@/lib/agent/emoji-screener";
 import {
@@ -367,13 +368,29 @@ export async function POST(request: Request) {
   // ═══════════════════════════════════════════════
   // ROUTE DECISION
   // ═══════════════════════════════════════════════
-  if (action === 'harassment' || action === 'silence') {
-    // Gemini detected abuse (multilingual, contextual, subtle)
+  if (action === 'harassment' || action === 'silence' || isThreat) {
+    // Gemini detected abuse or threat (multilingual, contextual, subtle)
     // Reuse harassment count already fetched during Guard 2
-    const harassReply = getHarassmentResponse(currentHarassmentCount);
+    const harassReply = isThreat 
+      ? HARASSMENT_RESPONSES.threat 
+      : getHarassmentResponse(currentHarassmentCount);
 
     if (harassReply !== null) {
       await whatsappIntegration.send(fromPhone, harassReply);
+      // Save the harassment/threat boundary message in the messages table
+      try {
+        await supabase.from("messages").insert({
+          conversation_id: conversation.id,
+          business_id: businessId,
+          role: isThreat ? "escalation" : "agent",
+          content: harassReply,
+          confidence_score: score.confidence,
+          intent_score: score.intent_score,
+          estimated_value: score.estimated_value,
+        });
+      } catch (dbErr) {
+        console.warn("Could not save harassment reply to messages:", dbErr);
+      }
     }
 
     await handleHarassmentEscalation(
@@ -387,7 +404,7 @@ export async function POST(request: Request) {
     console.log(JSON.stringify({
       event: 'harassment_handled',
       level: currentHarassmentCount,
-      blocked: currentHarassmentCount >= 1,
+      blocked: currentHarassmentCount >= 1 || isThreat,
       threat: isThreat,
       phone: fromPhone,
       timestamp: new Date().toISOString()
@@ -441,6 +458,28 @@ export async function POST(request: Request) {
     estimated_value: score.estimated_value,
   });
 
+  // If a transaction is detected or updated, persist it to the database
+  if (score.transaction_detected && score.transaction_type && score.transaction_status) {
+    try {
+      await supabase
+        .from("transactions")
+        .upsert({
+          business_id: businessId,
+          customer_id: customer.id,
+          conversation_id: conversation.id,
+          type: score.transaction_type,
+          status: score.transaction_status,
+          details: score.transaction_details || {},
+          value: score.estimated_value || 0,
+          updated_at: new Date().toISOString()
+        }, {
+          onConflict: "conversation_id,type"
+        });
+    } catch (txErr) {
+      console.warn("Could not save transaction to database (did you run the transactions SQL migration?):", txErr);
+    }
+  }
+
   // Dispatch message via Meta API
   await whatsappIntegration.send(fromPhone, finalReplyText);
 
@@ -454,6 +493,9 @@ export async function POST(request: Request) {
     escalate_reason: score.escalate_reason,
     owner_notified: shouldNotifyOwner(score),
     language: score.detected_language,
+    transaction_detected: score.transaction_detected,
+    transaction_type: score.transaction_type,
+    transaction_status: score.transaction_status,
     timestamp: new Date().toISOString()
   }));
 

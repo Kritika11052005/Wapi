@@ -4,12 +4,12 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 
 export const HARASSMENT_RESPONSES = {
   level1: [
-    "We only offer professional beauty and wellness services here. Feel free to reach out if you have a genuine enquiry! 🙏",
-    "This is a professional business account. We're happy to help with our services — anything else we can assist with?",
-    "Kritika's Beauty Studio is a professional space. We'd love to help if you need beauty or wellness services 😊"
+    "This is a professional business account. Please keep your language respectful. Further inappropriate messages will result in your number being blocked. 🙏",
+    "We only offer professional services here. Please note that further abuse or inappropriate messages will result in being blocked. 🙏",
+    "This is a professional space. Please keep this conversation respectful, otherwise your number will be blocked. 🙏"
   ],
-  level2: "This is a professional account. We will not be responding further to this conversation.",
-  threat: "We have noted this message and will be taking appropriate action."
+  level2: "This is a professional account. We will not be responding further and your number has been blocked.",
+  threat: "We have noted this threat and will be taking appropriate action. Your number has been blocked and this has been escalated to the business owner."
 }
 
 export function getHarassmentResponse(harassmentCount: number): string | null {
@@ -58,7 +58,7 @@ export async function handleHarassmentEscalation(
 
   // Block the customer after second offense
   try {
-    if (harassmentCount >= 1) {
+    if (harassmentCount >= 1 || isThreat) {
       await supabase
         .from('customers')
         .update({
@@ -70,7 +70,7 @@ export async function handleHarassmentEscalation(
         .eq('phone', phone)
         .eq('business_id', businessId)
     } else {
-      // First offense — just increment the count, no block yet
+      // First offense (non-threat) — just increment the count, no block yet
       await supabase
         .from('customers')
         .update({

@@ -34,6 +34,7 @@ export default function Dashboard() {
   const [conversations, setConversations] = useState<any[]>([]);
   const [selectedConv, setSelectedConv] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
+  const [activeTx, setActiveTx] = useState<any>(null);
 
   // Message composition & nudge state
   const [replyText, setReplyText] = useState("");
@@ -194,6 +195,21 @@ export default function Dashboard() {
     setMessages([]);
     setActiveNudge(null);
     setNudgeDraft("");
+    setActiveTx(null);
+
+    // Fetch active transaction if any
+    try {
+      const { data: txs } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("conversation_id", conv.id)
+        .order("updated_at", { ascending: false });
+      if (txs && txs.length > 0) {
+        setActiveTx(txs[0]);
+      }
+    } catch (txErr) {
+      console.warn("Could not fetch transactions:", txErr);
+    }
 
     // Fetch message history
     const { data: msgs, error } = await supabase
@@ -209,6 +225,24 @@ export default function Dashboard() {
     // Fetch active nudge if the conversation is stale
     if (conv.is_stale) {
       fetchNudge(conv.id);
+    }
+  };
+
+  // Update transaction status manually
+  const handleUpdateTxStatus = async (status: 'confirmed' | 'cancelled') => {
+    if (!activeTx) return;
+    try {
+      const { data, error } = await supabase
+        .from("transactions")
+        .update({ status, updated_at: new Date().toISOString() })
+        .eq("id", activeTx.id)
+        .select()
+        .single();
+      if (error) throw error;
+      setActiveTx(data);
+      alert(`Transaction marked as ${status}!`);
+    } catch (err: any) {
+      alert("Failed to update transaction: " + err.message);
     }
   };
 
@@ -668,6 +702,54 @@ export default function Dashboard() {
                   )}
                 </div>
               </div>
+
+              {/* Transaction Banner */}
+              {activeTx && (
+                <div className={`px-4 py-3 border-b flex items-center justify-between z-10 text-xs shrink-0 ${
+                  activeTx.status === 'confirmed'
+                    ? 'bg-emerald-950/20 border-emerald-900/30 text-emerald-400'
+                    : activeTx.status === 'cancelled'
+                      ? 'bg-red-950/20 border-red-900/30 text-red-400'
+                      : 'bg-indigo-950/20 border-indigo-900/30 text-indigo-400'
+                }`}>
+                  <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                    {activeTx.type === 'appointment' && <span className="text-sm shrink-0">📅</span>}
+                    {activeTx.type === 'order' && <span className="text-sm shrink-0">🛍️</span>}
+                    {activeTx.type === 'subscription' && <span className="text-sm shrink-0">💳</span>}
+                    <div className="truncate">
+                      <span className="font-bold uppercase tracking-wider text-[9px] font-mono mr-1.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800">
+                        {activeTx.type}: {activeTx.status}
+                      </span>
+                      <span className="text-slate-300">
+                        {activeTx.type === 'appointment' && `${activeTx.details?.service || 'Appointment'} - Date: ${activeTx.details?.date || 'N/A'}, Time: ${activeTx.details?.time || 'N/A'}`}
+                        {activeTx.type === 'order' && `${activeTx.details?.product || 'Product'} (Qty: ${activeTx.details?.quantity || 1}) - Deliver: ${activeTx.details?.address || 'N/A'}`}
+                        {activeTx.type === 'subscription' && `${activeTx.details?.plan || 'Plan'} membership (Email: ${activeTx.details?.email || 'N/A'})`}
+                      </span>
+                      {activeTx.value > 0 && (
+                        <span className="ml-2 font-mono font-bold text-emerald-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                          ₹{activeTx.value}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {activeTx.status === 'collecting' && (
+                    <div className="flex gap-1.5 shrink-0 ml-2">
+                      <button
+                        onClick={() => handleUpdateTxStatus('confirmed')}
+                        className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold tracking-tight cursor-pointer"
+                      >
+                        Confirm
+                      </button>
+                      <button
+                        onClick={() => handleUpdateTxStatus('cancelled')}
+                        className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Chat Thread */}
               <div className="flex-1 overflow-y-auto p-6 space-y-4">

@@ -1,9 +1,12 @@
+/* eslint-disable react-hooks/purity */
+/* eslint-disable react-hooks/set-state-in-effect */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { createClient } from "@/lib/client";
 import {
   MessageSquare,
   Bot,
@@ -23,7 +26,8 @@ import {
   Eye,
   Sliders,
   Building,
-  RefreshCw
+  RefreshCw,
+  Calendar
 } from "lucide-react";
 
 interface Message {
@@ -34,6 +38,12 @@ interface Message {
   transcribing?: boolean;
   transcriptionText?: string;
   duration?: string;
+  transaction?: {
+    type: "appointment" | "order" | "subscription";
+    status: "collecting" | "confirmed";
+    details: any;
+    value: number;
+  };
 }
 
 interface Conversation {
@@ -44,6 +54,15 @@ interface Conversation {
   value: number;
   intent: number;
   status: "open" | "auto-handled" | "escalated" | "stale" | "blocked";
+  chatHistory?: Message[];
+  sandboxTransaction?: any;
+  pipelineLogs?: any;
+  guardHarassmentCount?: number;
+  guardIsBlocked?: boolean;
+  guardLastMessageHash?: string | null;
+  guardRepeatCount?: number;
+  guardLastRepeatAt?: string | null;
+  isStale?: boolean;
 }
 
 interface PresetQuery {
@@ -186,6 +205,22 @@ const TEMPLATES = [
   }
 ];
 
+function generateRandomPhone(): string {
+  const digits = Array.from({ length: 9 }, () => Math.floor(Math.random() * 10)).join("");
+  return `+91 9${digits}`;
+}
+
+function getBusinessStorageKey(name: string, description: string): string {
+  let hash = 0;
+  const descStr = (description || "").trim().toLowerCase();
+  for (let i = 0; i < descStr.length; i++) {
+    const char = descStr.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return `wapi_demo_state_${name.trim().toLowerCase()}_desc_${Math.abs(hash)}`;
+}
+
 function getInitialInboxForTemplate(
   templateId: string,
   businessName: string,
@@ -195,69 +230,80 @@ function getInitialInboxForTemplate(
   // Card 1: The active simulator card
   const card1: Conversation = {
     id: "conv-1",
-    phone: "+91 98765 43210",
+    phone: generateRandomPhone(),
     lastMessage: `Hello! Welcome to ${businessName}...`,
     time: "Just now",
     value: 0,
     intent: 0.2,
-    status: "auto-handled"
+    status: "auto-handled",
+    chatHistory: [
+      {
+        sender: "system",
+        text: `WhatsApp chat session initialized with ${businessName}.`,
+        timestamp: "10:00 AM"
+      },
+      {
+        sender: "agent",
+        text: `Hello! Welcome to ${businessName}. How can we help you today?`,
+        timestamp: "10:00 AM"
+      }
+    ],
+    sandboxTransaction: null,
+    pipelineLogs: null,
+    guardHarassmentCount: 0,
+    guardIsBlocked: false,
+    guardLastMessageHash: null,
+    guardRepeatCount: 0,
+    guardLastRepeatAt: null,
+    isStale: false,
   };
 
   // Card 2: An open lead with high/medium intent
-  let card2Phone = "+91 99887 76655";
+  const card2Phone = generateRandomPhone();
   let card2Message = "";
   let card2Value = 1500;
   let card2Intent = 0.75;
 
   // Card 3: An auto-handled lead with low value/intent
-  let card3Phone = "+91 91234 56789";
+  const card3Phone = generateRandomPhone();
   let card3Message = "";
   let card3Value = 0;
   let card3Intent = 0.4;
 
   if (templateId === "salon") {
-    card2Phone = "+91 99887 76655";
     card2Message = presets[2]?.text || "what the price of women haircut";
     card2Value = 2000;
     card2Intent = 0.75;
 
-    card3Phone = "+91 91234 56789";
     card3Message = presets[0]?.text || "kaha hai tumhara shop?";
     card3Value = 0;
     card3Intent = 0.4;
   } else if (templateId === "bakery") {
-    card2Phone = "+91 99887 76655";
     card2Message = presets[2]?.text || "diliver to my home?";
     card2Value = 1100;
     card2Intent = 0.70;
 
-    card3Phone = "+91 91234 56789";
     card3Message = presets[3]?.text || "¿dónde está la panadería?";
     card3Value = 0;
     card3Intent = 0.35;
   } else if (templateId === "dental") {
-    card2Phone = "+91 88888 77777";
     card2Message = presets[1]?.text || "root canal treatment cha kharch kiti aahe?";
     card2Value = 4500;
     card2Intent = 0.85;
 
-    card3Phone = "+91 91234 56789";
     card3Message = presets[0]?.text || "teeth whitening cost kitna hai?";
     card3Value = 1200;
     card3Intent = 0.50;
   } else if (templateId === "gym") {
-    card2Phone = "+91 77777 66666";
     card2Message = presets[2]?.text || "personal training price";
     card2Value = 5000;
     card2Intent = 0.80;
 
-    card3Phone = "+91 91234 56789";
     card3Message = presets[1]?.text || "gym timing kay aahe?";
     card3Value = 1500;
     card3Intent = 0.45;
   } else {
     // Custom business or customized templates
-    card2Phone = "+91 99000 88000";
     card2Message = presets[2]?.text || presets[1]?.text || `I want to check rates for ${businessType}`;
 
     // Try to extract value from dynamic presets
@@ -271,36 +317,90 @@ function getInitialInboxForTemplate(
     card2Value = extractedVal;
     card2Intent = 0.70;
 
-    card3Phone = "+91 91234 56789";
     card3Message = presets[0]?.text || `Where is ${businessName} located?`;
     card3Value = 0;
     card3Intent = 0.40;
   }
 
-  return [
-    card1,
-    {
-      id: "conv-2",
-      phone: card2Phone,
-      lastMessage: card2Message,
-      time: "10m ago",
-      value: card2Value,
-      intent: card2Intent,
-      status: "open"
-    },
-    {
-      id: "conv-3",
-      phone: card3Phone,
-      lastMessage: card3Message,
-      time: "1h ago",
-      value: card3Value,
-      intent: card3Intent,
-      status: "auto-handled"
-    }
-  ];
+  const card2: Conversation = {
+    id: "conv-2",
+    phone: card2Phone,
+    lastMessage: card2Message,
+    time: "10m ago",
+    value: card2Value,
+    intent: card2Intent,
+    status: "open",
+    chatHistory: [
+      {
+        sender: "system",
+        text: `WhatsApp chat session initialized with ${businessName}.`,
+        timestamp: "09:50 AM"
+      },
+      {
+        sender: "agent",
+        text: `Hello! Welcome to ${businessName}. How can we help you today?`,
+        timestamp: "09:50 AM"
+      },
+      {
+        sender: "customer",
+        text: card2Message,
+        timestamp: "10m ago"
+      }
+    ],
+    sandboxTransaction: null,
+    pipelineLogs: null,
+    guardHarassmentCount: 0,
+    guardIsBlocked: false,
+    guardLastMessageHash: null,
+    guardRepeatCount: 0,
+    guardLastRepeatAt: null,
+    isStale: false,
+  };
+
+  const card3: Conversation = {
+    id: "conv-3",
+    phone: card3Phone,
+    lastMessage: card3Message,
+    time: "1h ago",
+    value: card3Value,
+    intent: card3Intent,
+    status: "auto-handled",
+    chatHistory: [
+      {
+        sender: "system",
+        text: `WhatsApp chat session initialized with ${businessName}.`,
+        timestamp: "09:00 AM"
+      },
+      {
+        sender: "agent",
+        text: `Hello! Welcome to ${businessName}. How can we help you today?`,
+        timestamp: "09:00 AM"
+      },
+      {
+        sender: "customer",
+        text: card3Message,
+        timestamp: "1h ago"
+      }
+    ],
+    sandboxTransaction: null,
+    pipelineLogs: null,
+    guardHarassmentCount: 0,
+    guardIsBlocked: false,
+    guardLastMessageHash: null,
+    guardRepeatCount: 0,
+    guardLastRepeatAt: null,
+    isStale: false,
+  };
+
+  return [card1, card2, card3];
 }
 
 export default function DemoPage() {
+  const supabase = createClient();
+  const [dbBusiness, setDbBusiness] = useState<any>(null);
+  const [dbConversations, setDbConversations] = useState<Conversation[]>([]);
+  const [dbTransactions, setDbTransactions] = useState<any[]>([]);
+
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [setupTemplate, setSetupTemplate] = useState("salon");
   const [setupBusinessName, setSetupBusinessName] = useState("Kritika's Beauty Studio");
@@ -422,18 +522,267 @@ export default function DemoPage() {
     return getInitialInboxForTemplate("salon", "Kritika's Beauty Studio", "Beauty Salon", TEMPLATES[0].presets);
   });
 
-  const [activeTab, setActiveTab] = useState<"inbox" | "knowledge" | "pipeline">("pipeline");
+  const [activeConversationId, setActiveConversationId] = useState<string>("conv-1");
+
+  const selectConversation = (id: string) => {
+    if (id === activeConversationId) return;
+
+    setInboxList((prev) => {
+      const nextConv = prev.find((c) => c.id === id);
+      if (nextConv) {
+        setChatHistory(nextConv.chatHistory || []);
+        setSandboxTransaction(nextConv.sandboxTransaction || null);
+        setPipelineLogs(nextConv.pipelineLogs || null);
+        setGuardHarassmentCount(nextConv.guardHarassmentCount || 0);
+        setGuardIsBlocked(nextConv.guardIsBlocked || false);
+        setGuardLastMessageHash(nextConv.guardLastMessageHash || null);
+        setGuardRepeatCount(nextConv.guardRepeatCount || 0);
+        setGuardLastRepeatAt(nextConv.guardLastRepeatAt || null);
+        setIsStale(nextConv.isStale || false);
+      }
+
+      return prev.map((c) => {
+        if (c.id === activeConversationId) {
+          return {
+            ...c,
+            chatHistory,
+            sandboxTransaction,
+            pipelineLogs,
+            guardHarassmentCount,
+            guardIsBlocked,
+            guardLastMessageHash,
+            guardRepeatCount,
+            guardLastRepeatAt,
+            isStale,
+          };
+        }
+        return c;
+      });
+    });
+
+    setActiveConversationId(id);
+  };
+
+  const [activeTab, setActiveTab] = useState<"inbox" | "knowledge" | "pipeline" | "bookings">("bookings");
+  const [sandboxTransaction, setSandboxTransaction] = useState<any>(null);
+  const [completedTransactions, setCompletedTransactions] = useState<any[]>([]);
   const [pipelineLogs, setPipelineLogs] = useState<any>(null);
   const [isStale, setIsStale] = useState(false);
   const [nudgeDraft, setNudgeDraft] = useState("");
   const [isGeneratingNudge, setIsGeneratingNudge] = useState(false);
+  const [crmReplyMessage, setCrmReplyMessage] = useState("");
+  const [staleTimeLimit, setStaleTimeLimit] = useState(5);
+  const [enableStaleNudge, setEnableStaleNudge] = useState(true);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Load database settings if logged in
+  useEffect(() => {
+    async function loadDbConfig() {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: biz } = await supabase
+            .from("businesses")
+            .select("*")
+            .eq("user_id", user.id)
+            .single();
+
+          if (biz) {
+            setDbBusiness(biz);
+            setSetupBusinessName(biz.name);
+            setSetupBusinessType(biz.vertical || "Business");
+            setSetupKnowledgeText(biz.knowledge || "");
+
+            // Fetch transactions
+            const { data: txs } = await supabase
+              .from("transactions")
+              .select("*, customers(*)")
+              .eq("business_id", biz.id)
+              .order("updated_at", { ascending: false });
+
+            if (txs) {
+              const mappedTxs = txs.map(t => ({
+                type: t.type,
+                status: t.status,
+                details: t.details || {},
+                value: Number(t.value || 0),
+                timestamp: new Date(t.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                customerPhone: t.customers?.phone,
+                customerName: t.customers?.display_name
+              }));
+              setDbTransactions(mappedTxs);
+              setCompletedTransactions(mappedTxs);
+            }
+
+            // Fetch conversations
+            // Fetch conversations
+            let { data: convs } = await supabase
+              .from("conversations")
+              .select("*, customers(*)")
+              .eq("business_id", biz.id)
+              .order("last_message_at", { ascending: false });
+
+            if (!convs || convs.length === 0) {
+              const mockPresets = [
+                { phone: generateRandomPhone(), msg: `Hello! Welcome to ${biz.name}...`, val: 0, intent: 0.2, status: "auto-handled" },
+                { phone: generateRandomPhone(), msg: "what is the price of services?", val: 1500, intent: 0.75, status: "open" },
+                { phone: generateRandomPhone(), msg: `where is ${biz.name} located?`, val: 0, intent: 0.4, status: "auto-handled" }
+              ];
+
+              for (const item of mockPresets) {
+                // 1. Insert customer
+                const { data: customer } = await supabase
+                  .from("customers")
+                  .insert({
+                    business_id: biz.id,
+                    phone: item.phone,
+                    display_name: `Customer ${item.phone.slice(-4)}`
+                  })
+                  .select()
+                  .single();
+
+                if (customer) {
+                  // 2. Insert conversation
+                  const { data: conv } = await supabase
+                    .from("conversations")
+                    .insert({
+                      business_id: biz.id,
+                      customer_id: customer.id,
+                      status: item.status,
+                      intent_score: item.intent,
+                      estimated_value: item.val,
+                      last_message_content: item.msg,
+                      last_message_at: new Date().toISOString()
+                    })
+                    .select()
+                    .single();
+
+                  if (conv) {
+                    // 3. Insert messages
+                    await supabase.from("messages").insert([
+                      {
+                        conversation_id: conv.id,
+                        business_id: biz.id,
+                        role: "system",
+                        content: `WhatsApp chat session initialized with ${biz.name}.`
+                      },
+                      {
+                        conversation_id: conv.id,
+                        business_id: biz.id,
+                        role: "agent",
+                        content: `Hello! Welcome to ${biz.name}. How can we help you today?`
+                      }
+                    ]);
+                    if (item.status === "open" || item.val > 0) {
+                      await supabase.from("messages").insert({
+                        conversation_id: conv.id,
+                        business_id: biz.id,
+                        role: "customer",
+                        content: item.msg
+                      });
+                    }
+                  }
+                }
+              }
+
+              // Re-fetch
+              const { data: refetched } = await supabase
+                .from("conversations")
+                .select("*, customers(*)")
+                .eq("business_id", biz.id)
+                .order("last_message_at", { ascending: false });
+              convs = refetched;
+            }
+
+            if (convs && convs.length > 0) {
+              // Fetch messages in batch
+              const { data: allMsgs } = await supabase
+                .from("messages")
+                .select("*")
+                .in("conversation_id", convs.map(c => c.id))
+                .order("created_at", { ascending: true });
+
+              const mappedConvs = convs.map((c: any) => {
+                const convMsgs = (allMsgs || []).filter((m: any) => m.conversation_id === c.id);
+                const chatHistory: Message[] = convMsgs.map((m: any) => {
+                  let sender: "customer" | "agent" | "owner" | "system" = "agent";
+                  if (m.role === "customer") sender = "customer";
+                  else if (m.role === "owner") sender = "owner";
+                  else if (m.role === "escalation") sender = "owner";
+
+                  return {
+                    sender,
+                    text: m.content || "",
+                    timestamp: new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                  };
+                });
+
+                if (chatHistory.length === 0) {
+                  chatHistory.push(
+                    {
+                      sender: "system",
+                      text: `WhatsApp chat session initialized with ${biz.name}.`,
+                      timestamp: "10:00 AM"
+                    },
+                    {
+                      sender: "agent",
+                      text: `Hello! Welcome to ${biz.name}. How can we help you today?`,
+                      timestamp: "10:00 AM"
+                    }
+                  );
+                }
+
+                return {
+                  id: c.id,
+                  phone: c.customers?.phone || "Unknown Customer",
+                  lastMessage: c.last_message_content || (chatHistory[chatHistory.length - 1]?.text || ""),
+                  time: new Date(c.last_message_at || c.created_at).toLocaleDateString() + " " + new Date(c.last_message_at || c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  value: Number(c.estimated_value || 0),
+                  intent: Number(c.intent_score || 0),
+                  status: (c.status === "escalated" ? "escalated" : c.status === "blocked" ? "blocked" : c.is_stale ? "stale" : "auto-handled") as "open" | "auto-handled" | "escalated" | "stale" | "blocked",
+                  chatHistory,
+                  guardHarassmentCount: c.harassment_count || 0,
+                  guardIsBlocked: c.status === "blocked",
+                  guardLastMessageHash: c.last_message_hash || null,
+                  guardRepeatCount: c.repeat_count || 0,
+                  guardLastRepeatAt: c.last_repeat_at || null,
+                  isStale: c.is_stale || false
+                };
+              });
+
+              setDbConversations(mappedConvs);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Could not load database configurations:", err);
+      }
+    }
+    loadDbConfig();
+  }, [supabase]);
 
   // Auto-scroll chat window
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, isTyping]);
+
+  // Synchronize sandbox state (chats, inbox, bookings) to localStorage to persist across navigation/reload
+  useEffect(() => {
+    if (isSetupComplete && setupBusinessName) {
+      try {
+        const storageKey = getBusinessStorageKey(setupBusinessName, setupKnowledgeText);
+        localStorage.setItem(storageKey, JSON.stringify({
+          inboxList,
+          completedTransactions,
+          staleTimeLimit,
+          enableStaleNudge
+        }));
+      } catch (err) {
+        console.warn("Failed to persist sandbox state to localStorage:", err);
+      }
+    }
+  }, [inboxList, completedTransactions, staleTimeLimit, enableStaleNudge, isSetupComplete, setupBusinessName, setupKnowledgeText]);
 
   // Handle Preset Clicks
   const handlePresetClick = (presetText: string) => {
@@ -532,33 +881,195 @@ export default function DemoPage() {
     setKnowledgeText(setupKnowledgeText);
     setPresets(finalPresets);
 
-    // Re-initialize chat history
-    setChatHistory([
-      {
-        sender: "system",
-        text: `WhatsApp chat session initialized with ${setupBusinessName}.`,
-        timestamp: "10:00 AM"
-      },
-      {
-        sender: "agent",
-        text: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`,
-        timestamp: "10:00 AM"
+    const isDbTemplate = setupTemplate === "custom" && dbBusiness;
+    if (isDbTemplate) {
+      let dbConvId = null;
+      const randomPhone = generateRandomPhone();
+      try {
+        const { data: customer } = await supabase
+          .from("customers")
+          .insert({
+            business_id: dbBusiness.id,
+            phone: randomPhone,
+            display_name: `Customer ${randomPhone.slice(-4)}`
+          })
+          .select()
+          .single();
+
+        if (customer) {
+          const { data: conv } = await supabase
+            .from("conversations")
+            .insert({
+              business_id: dbBusiness.id,
+              customer_id: customer.id,
+              status: "open",
+              intent_score: 0.2,
+              estimated_value: 0,
+              last_message_content: "WhatsApp session started.",
+              last_message_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+          if (conv) {
+            dbConvId = conv.id;
+            await supabase.from("messages").insert([
+              {
+                conversation_id: conv.id,
+                business_id: dbBusiness.id,
+                role: "system",
+                content: `WhatsApp chat session initialized with ${setupBusinessName}.`
+              },
+              {
+                conversation_id: conv.id,
+                business_id: dbBusiness.id,
+                role: "agent",
+                content: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`
+              }
+            ]);
+          }
+        }
+      } catch (dbErr) {
+        console.error("Failed to start new chat in DB during launch:", dbErr);
       }
-    ]);
 
-    // Re-initialize inbox queue dynamically
-    setInboxList(getInitialInboxForTemplate(setupTemplate, setupBusinessName, setupBusinessType, finalPresets));
+      const freshConvId = dbConvId || `conv-${Date.now()}`;
+      const newHistory: Message[] = [
+        {
+          sender: "system",
+          text: `WhatsApp chat session initialized with ${setupBusinessName}.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        },
+        {
+          sender: "agent",
+          text: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        }
+      ];
 
-    setIsStale(false);
+      const freshConv: Conversation = {
+        id: freshConvId,
+        phone: randomPhone,
+        lastMessage: "Session started.",
+        time: "Just now",
+        value: 0,
+        intent: 0.2,
+        status: "open",
+        chatHistory: newHistory,
+        sandboxTransaction: null,
+        pipelineLogs: null,
+        guardHarassmentCount: 0,
+        guardIsBlocked: false,
+        guardLastMessageHash: null,
+        guardRepeatCount: 0,
+        guardLastRepeatAt: null,
+        isStale: false
+      };
+
+      setInboxList([freshConv, ...dbConversations]);
+      setActiveConversationId(freshConvId);
+      setChatHistory(newHistory);
+      setGuardHarassmentCount(0);
+      setGuardIsBlocked(false);
+      setGuardLastMessageHash(null);
+      setGuardRepeatCount(0);
+      setGuardLastRepeatAt(null);
+      setIsStale(false);
+      setCompletedTransactions(dbTransactions);
+    } else {
+      // Check if we have cached data in localStorage for this business name
+      const storageKey = getBusinessStorageKey(setupBusinessName, setupKnowledgeText);
+      const cached = localStorage.getItem(storageKey);
+      let loadedFromCache = false;
+      if (cached) {
+        try {
+          const { inboxList: cachedInbox, completedTransactions: cachedTxs, staleTimeLimit: cachedStale, enableStaleNudge: cachedEnable } = JSON.parse(cached);
+          if (cachedStale !== undefined) {
+            setStaleTimeLimit(cachedStale);
+          }
+          if (cachedEnable !== undefined) {
+            setEnableStaleNudge(cachedEnable);
+          }
+          if (cachedInbox && cachedInbox.length > 0) {
+            const randomPhone = generateRandomPhone();
+            const freshConvId = `conv-${Date.now()}`;
+            const newHistory: Message[] = [
+              {
+                sender: "system",
+                text: `WhatsApp chat session initialized with ${setupBusinessName}.`,
+                timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              },
+              {
+                sender: "agent",
+                text: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`,
+                timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              }
+            ];
+
+            const freshConv: Conversation = {
+              id: freshConvId,
+              phone: randomPhone,
+              lastMessage: "Session started.",
+              time: "Just now",
+              value: 0,
+              intent: 0.2,
+              status: "open",
+              chatHistory: newHistory,
+              sandboxTransaction: null,
+              pipelineLogs: null,
+              guardHarassmentCount: 0,
+              guardIsBlocked: false,
+              guardLastMessageHash: null,
+              guardRepeatCount: 0,
+              guardLastRepeatAt: null,
+              isStale: false
+            };
+
+            setInboxList([freshConv, ...cachedInbox]);
+            setActiveConversationId(freshConvId);
+            setChatHistory(newHistory);
+            setGuardHarassmentCount(0);
+            setGuardIsBlocked(false);
+            setGuardLastMessageHash(null);
+            setGuardRepeatCount(0);
+            setGuardLastRepeatAt(null);
+            setIsStale(false);
+            setCompletedTransactions(cachedTxs || []);
+            loadedFromCache = true;
+          }
+        } catch (e) {
+          console.warn("Failed to load cached demo state:", e);
+        }
+      }
+
+      if (!loadedFromCache) {
+        // Re-initialize fresh template state
+        setChatHistory([
+          {
+            sender: "system",
+            text: `WhatsApp chat session initialized with ${setupBusinessName}.`,
+            timestamp: "10:00 AM"
+          },
+          {
+            sender: "agent",
+            text: `Hello! Welcome to ${setupBusinessName}. How can we help you today?`,
+            timestamp: "10:00 AM"
+          }
+        ]);
+        setInboxList(getInitialInboxForTemplate(setupTemplate, setupBusinessName, setupBusinessType, finalPresets));
+        setActiveConversationId("conv-1");
+        setGuardHarassmentCount(0);
+        setGuardIsBlocked(false);
+        setGuardLastMessageHash(null);
+        setGuardRepeatCount(0);
+        setGuardLastRepeatAt(null);
+        setIsStale(false);
+        setCompletedTransactions([]);
+      }
+    }
     setPipelineLogs(null);
-    setActiveTab("pipeline");
-
-    // Reset guard state on new sandbox
-    setGuardHarassmentCount(0);
-    setGuardIsBlocked(false);
-    setGuardLastMessageHash(null);
-    setGuardRepeatCount(0);
-    setGuardLastRepeatAt(null);
+    setActiveTab("bookings");
+    setSandboxTransaction(null);
 
     setIsLoading(false);
     setIsSetupComplete(true);
@@ -594,6 +1105,21 @@ export default function DemoPage() {
     const newHistory = [...chatHistory, newMsg];
     setChatHistory(newHistory);
     setIsTyping(true);
+
+    // Sync customer message into inbox list
+    setInboxList((prev) =>
+      prev.map((conv) => {
+        if (conv.id === activeConversationId) {
+          return {
+            ...conv,
+            lastMessage: isVoice ? "[Voice Note]" : text,
+            time: "Just now",
+            chatHistory: newHistory
+          };
+        }
+        return conv;
+      })
+    );
 
     try {
       const payload: any = {
@@ -632,47 +1158,51 @@ export default function DemoPage() {
       setIsTyping(false);
 
       if (data.error) {
+        let errorHistory = [...newHistory];
         if (isVoice) {
-          setChatHistory((prev) =>
-            prev.map((msg) => {
-              if (msg.isVoiceNote && msg.transcribing) {
-                return {
-                  ...msg,
-                  transcribing: false,
-                  text: `[Voice Note Error: ${data.error}]`,
-                  transcriptionText: `Failed to transcribe: ${data.error}`
-                };
-              }
-              return msg;
-            })
-          );
-        }
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            sender: "system",
-            text: `Error: ${data.error}`,
-            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-          }
-        ]);
-        return;
-      }
-
-      // If voice note succeeded, update its transcription
-      if (isVoice && data.transcription) {
-        setChatHistory((prev) =>
-          prev.map((msg) => {
+          errorHistory = errorHistory.map((msg) => {
             if (msg.isVoiceNote && msg.transcribing) {
               return {
                 ...msg,
                 transcribing: false,
-                transcriptionText: data.transcription,
-                text: `🎤 Voice Note: "${data.transcription}"`
+                text: `[Voice Note Error: ${data.error}]`,
+                transcriptionText: `Failed to transcribe: ${data.error}`
               };
             }
             return msg;
-          })
+          });
+        }
+        errorHistory = [
+          ...errorHistory,
+          {
+            sender: "system" as const,
+            text: `Error: ${data.error}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+          }
+        ];
+        setChatHistory(errorHistory);
+        setInboxList((prev) =>
+          prev.map((conv) => (conv.id === activeConversationId ? { ...conv, chatHistory: errorHistory } : conv))
         );
+        return;
+      }
+
+      // We start with newHistory (with customer message)
+      let finalHistory = [...newHistory];
+
+      // If voice note succeeded, update its transcription
+      if (isVoice && data.transcription) {
+        finalHistory = finalHistory.map((msg) => {
+          if (msg.isVoiceNote && msg.transcribing) {
+            return {
+              ...msg,
+              transcribing: false,
+              transcriptionText: data.transcription,
+              text: `🎤 Voice Note: "${data.transcription}"`
+            };
+          }
+          return msg;
+        });
       }
 
       // ── Update guard state from API response ──
@@ -684,116 +1214,150 @@ export default function DemoPage() {
 
       // Handle blocked (Guard 1) — no response, just a system banner
       if (data.guardAction === 'blocked') {
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            sender: "system",
-            text: "🚫 This customer is blocked. Message ignored — no reply sent.",
-            timestamp
-          }
-        ]);
+        finalHistory.push({
+          sender: "system",
+          text: "🚫 This customer is blocked. Message ignored — no reply sent.",
+          timestamp
+        });
       }
       // Handle repeat detection (Guard 2)
       else if (data.guardAction?.startsWith('repeat_')) {
         if (data.guardAction === 'repeat_ignore') {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "system",
-              text: "🔇 Repeat spam detected (4th+ time). Complete silence — no reply sent.",
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "system",
+            text: "🔇 Repeat spam detected (4th+ time). Complete silence — no reply sent.",
+            timestamp
+          });
         } else if (data.response) {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "agent",
-              text: data.response,
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "agent",
+            text: data.response,
+            timestamp
+          });
         }
       }
       // Handle emoji abuse (Guard 3)
       else if (data.guardAction === 'emoji_abuse') {
         if (data.response) {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "agent",
-              text: data.response,
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "agent",
+            text: data.response,
+            timestamp
+          });
         }
         if (data.newIsBlocked) {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "system",
-              text: "🚫 Customer blocked after repeated emoji abuse.",
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "system",
+            text: "🚫 Customer blocked after repeated emoji abuse.",
+            timestamp
+          });
         }
       }
       // Handle Gemini-detected abuse
       else if (data.guardAction === 'gemini_abuse') {
         if (data.response) {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "agent",
-              text: data.response,
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "agent",
+            text: data.response,
+            timestamp
+          });
         }
         if (data.newIsBlocked) {
-          setChatHistory((prev) => [
-            ...prev,
-            {
-              sender: "system",
-              text: "🚫 Customer blocked after repeated harassment. All future messages will be silently ignored.",
-              timestamp
-            }
-          ]);
+          finalHistory.push({
+            sender: "system",
+            text: "🚫 Customer blocked after repeated harassment. All future messages will be silently ignored.",
+            timestamp
+          });
+        }
+      }
+      // Handle safety block (PROHIBITED_CONTENT)
+      else if (data.guardAction === 'safety_block') {
+        if (data.response) {
+          finalHistory.push({
+            sender: "system",
+            text: data.response,
+            timestamp
+          });
+        }
+        if (data.newIsBlocked) {
+          finalHistory.push({
+            sender: "system",
+            text: "🚫 Customer blocked after repeated safety policy violations.",
+            timestamp
+          });
         }
       }
       // Normal AI response
       else if (data.response && data.response !== "ESCALATE") {
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            sender: "agent",
-            text: data.response,
-            timestamp
-          }
-        ]);
+        finalHistory.push({
+          sender: "agent",
+          text: data.response,
+          timestamp,
+          transaction: data.transaction_detected ? {
+            type: data.transaction_type,
+            status: data.transaction_status,
+            details: data.transaction_details,
+            value: data.evaluation?.estimatedValue ?? 0
+          } : undefined
+        });
+      }
+
+      // Update sandbox transaction state
+      if (data.transaction_detected && data.transaction_type && data.transaction_status) {
+        const txObj = {
+          type: data.transaction_type,
+          status: data.transaction_status,
+          details: data.transaction_details,
+          value: data.evaluation?.estimatedValue ?? 0,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+        };
+        setSandboxTransaction(txObj);
+        if (data.transaction_status === 'confirmed') {
+          setCompletedTransactions(prev => {
+            if (prev.some(t => t.type === txObj.type && JSON.stringify(t.details) === JSON.stringify(txObj.details))) {
+              return prev;
+            }
+            return [...prev, txObj];
+          });
+        }
       }
 
       // Add Escalation banner if escalated
       if (data.status === "escalated" && !data.guardAction) {
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            sender: "system",
-            text: "⚠️ Conversation escalated to business owner.",
-            timestamp
-          }
-        ]);
+        finalHistory.push({
+          sender: "system",
+          text: "⚠️ Conversation escalated to business owner.",
+          timestamp
+        });
       }
 
       // Update Pipeline Inspector Logs
       setPipelineLogs(data);
 
-      // Update CRM sandbox inbox card (conv-1 is our active simulator)
+      // Commit to active state
+      setChatHistory(finalHistory);
+
+      // Update CRM sandbox inbox card
       setInboxList((prev) => {
         const updated = prev.map((conv) => {
-          if (conv.id === "conv-1") {
+          if (conv.id === activeConversationId) {
             return {
               ...conv,
+              chatHistory: finalHistory,
+              sandboxTransaction: (data.transaction_detected && data.transaction_type && data.transaction_status) ? {
+                type: data.transaction_type,
+                status: data.transaction_status,
+                details: data.transaction_details,
+                value: data.evaluation?.estimatedValue ?? 0,
+                timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+              } : conv.sandboxTransaction,
+              pipelineLogs: data,
+              guardHarassmentCount: data.newHarassmentCount !== undefined ? data.newHarassmentCount : conv.guardHarassmentCount,
+              guardIsBlocked: data.newIsBlocked !== undefined ? data.newIsBlocked : conv.guardIsBlocked,
+              guardLastMessageHash: data.newLastMessageHash !== undefined ? data.newLastMessageHash : conv.guardLastMessageHash,
+              guardRepeatCount: data.newRepeatCount !== undefined ? data.newRepeatCount : conv.guardRepeatCount,
+              guardLastRepeatAt: data.newLastRepeatAt !== undefined ? data.newLastRepeatAt : conv.guardLastRepeatAt,
+              isStale: false,
               lastMessage: data.status === "blocked"
                 ? "🚫 Blocked"
                 : data.response === "ESCALATE"
@@ -816,24 +1380,152 @@ export default function DemoPage() {
         });
       });
 
+      // Sync to database if conversation is db-backed
+      if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+        try {
+          let customerContent = text;
+          if (isVoice && data.transcription) {
+            customerContent = `🎤 Voice Note: "${data.transcription}"`;
+          }
+          await supabase.from("messages").insert({
+            conversation_id: activeConversationId,
+            business_id: dbBusiness.id,
+            role: "customer",
+            content: customerContent
+          });
+
+          let agentRole = "agent";
+          if (data.status === "escalated" || data.response === "ESCALATE") {
+            agentRole = "escalation";
+          }
+
+          let replyText = data.response;
+          if (data.guardAction === 'blocked') {
+            replyText = "🚫 This customer is blocked. Message ignored — no reply sent.";
+            agentRole = "agent";
+          } else if (data.guardAction === 'repeat_ignore') {
+            replyText = "🔇 Repeat spam detected. Silence — no reply sent.";
+            agentRole = "agent";
+          } else if (data.newIsBlocked && data.guardAction === 'emoji_abuse') {
+            replyText = "🚫 Customer blocked after repeated emoji abuse.";
+            agentRole = "agent";
+          } else if (data.newIsBlocked && data.guardAction === 'gemini_abuse') {
+            replyText = "🚫 Customer blocked after repeated harassment.";
+            agentRole = "agent";
+          } else if (data.newIsBlocked && data.guardAction === 'safety_block') {
+            replyText = "🚫 Customer blocked after repeated safety policy violations.";
+            agentRole = "agent";
+          }
+
+          if (replyText) {
+            await supabase.from("messages").insert({
+              conversation_id: activeConversationId,
+              business_id: dbBusiness.id,
+              role: agentRole,
+              content: replyText,
+              confidence_score: data.evaluation?.confidenceScore ?? null,
+              intent_score: data.evaluation?.intentScore ?? null,
+              estimated_value: data.evaluation?.estimatedValue ?? null
+            });
+          }
+
+          const updateFields: any = {
+            last_message_at: new Date().toISOString(),
+            intent_score: data.evaluation?.intentScore ?? 0,
+            estimated_value: data.evaluation?.estimatedValue ?? 0,
+          };
+
+          if (data.status) {
+            updateFields.status = data.status;
+          }
+          if (data.newIsBlocked) {
+            updateFields.status = "blocked";
+          }
+
+          await supabase
+            .from("conversations")
+            .update(updateFields)
+            .eq("id", activeConversationId);
+
+          if (data.transaction_detected && data.transaction_type && data.transaction_status) {
+            const { data: convData } = await supabase
+              .from("conversations")
+              .select("customer_id")
+              .eq("id", activeConversationId)
+              .single();
+
+            if (convData?.customer_id) {
+              const { error: txErr } = await supabase
+                .from("transactions")
+                .upsert({
+                  business_id: dbBusiness.id,
+                  customer_id: convData.customer_id,
+                  conversation_id: activeConversationId,
+                  type: data.transaction_type,
+                  status: data.transaction_status,
+                  details: data.transaction_details || {},
+                  value: data.evaluation?.estimatedValue ?? 0,
+                  updated_at: new Date().toISOString()
+                }, {
+                  onConflict: "conversation_id,type"
+                });
+
+              if (!txErr) {
+                const { data: latestTxs } = await supabase
+                  .from("transactions")
+                  .select("*, customers(*)")
+                  .eq("business_id", dbBusiness.id)
+                  .order("updated_at", { ascending: false });
+
+                if (latestTxs) {
+                  const mappedTxs = latestTxs.map(t => ({
+                    type: t.type,
+                    status: t.status,
+                    details: t.details || {},
+                    value: Number(t.value || 0),
+                    timestamp: new Date(t.updated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+                    customerPhone: t.customers?.phone,
+                    customerName: t.customers?.display_name
+                  }));
+                  setDbTransactions(mappedTxs);
+                  setCompletedTransactions(mappedTxs);
+                }
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.error("Failed to sync message/transaction with DB:", dbErr);
+        }
+      }
+
       // Clear stale state if customer replies
       setIsStale(false);
     } catch (e: any) {
       setIsTyping(false);
       console.error(e);
-      setChatHistory((prev) => [
-        ...prev,
+      const errorHistory = [
+        ...newHistory,
         {
-          sender: "system",
+          sender: "system" as const,
           text: `Failed to connect to the backend agent: ${e.message}`,
           timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         }
-      ]);
+      ];
+      setChatHistory(errorHistory);
+      setInboxList((prev) =>
+        prev.map((conv) => (conv.id === activeConversationId ? { ...conv, chatHistory: errorHistory } : conv))
+      );
     }
   };
 
-  // Simulate 2 Hours passing
+  // Simulate stale passing
   const triggerStaleSimulation = async () => {
+    const hasCustomerMsg = chatHistory.some(m => m.sender === "customer");
+    if (!hasCustomerMsg) {
+      alert("Please send a message from the customer first to start the conversation before simulating a stale lead.");
+      return;
+    }
+
     setIsStale(true);
     setIsGeneratingNudge(true);
     setActiveTab("inbox"); // Focus inbox tab
@@ -841,17 +1533,33 @@ export default function DemoPage() {
     // Update active inbox card to stale
     setInboxList((prev) => {
       const updated = prev.map((conv) => {
-        if (conv.id === "conv-1") {
+        if (conv.id === activeConversationId) {
           return {
             ...conv,
             status: "stale" as const,
-            time: "2h ago"
+            time: `${staleTimeLimit}m ago`,
+            isStale: true
           };
         }
         return conv;
       });
       return [...updated];
     });
+
+    if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+      try {
+        await supabase
+          .from("conversations")
+          .update({
+            is_stale: true,
+            stale_detected_at: new Date().toISOString(),
+            status: "stale"
+          })
+          .eq("id", activeConversationId);
+      } catch (dbErr) {
+        console.error("Failed to mark conversation stale in database:", dbErr);
+      }
+    }
 
     try {
       const apiKey = process.env.GEMINI_API_KEY;
@@ -884,34 +1592,281 @@ export default function DemoPage() {
   };
 
   // Send manual follow-up nudge
-  const sendNudge = () => {
+  const sendNudge = async () => {
     if (!nudgeDraft.trim()) return;
 
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    setChatHistory((prev) => [
-      ...prev,
+    const updatedHistory: Message[] = [
+      ...chatHistory,
       {
         sender: "owner",
         text: nudgeDraft,
         timestamp
       }
-    ]);
+    ];
+    setChatHistory(updatedHistory);
 
     setIsStale(false);
 
     setInboxList((prev) => {
       return prev.map((conv) => {
-        if (conv.id === "conv-1") {
+        if (conv.id === activeConversationId) {
           return {
             ...conv,
+            chatHistory: updatedHistory,
             lastMessage: `Nudge Sent: "${nudgeDraft.substring(0, 30)}..."`,
             status: "open",
-            time: "Just now"
+            time: "Just now",
+            isStale: false
           };
         }
         return conv;
       });
     });
+
+    if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+      try {
+        // Insert nudge message from owner
+        await supabase.from("messages").insert({
+          conversation_id: activeConversationId,
+          business_id: dbBusiness.id,
+          role: "owner",
+          content: nudgeDraft
+        });
+
+        // Reset stale in conversations
+        await supabase
+          .from("conversations")
+          .update({
+            is_stale: false,
+            stale_detected_at: null,
+            status: "open"
+          })
+          .eq("id", activeConversationId);
+      } catch (dbErr) {
+        console.error("Failed to persist nudge to database:", dbErr);
+      }
+    }
+  };
+
+  // Send manual reply from CRM portal
+  const handleCrmSendReply = async () => {
+    if (!crmReplyMessage.trim()) return;
+
+    const replyText = crmReplyMessage.trim();
+    setCrmReplyMessage("");
+
+    const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const newMsg: Message = {
+      sender: "owner",
+      text: replyText,
+      timestamp
+    };
+
+    const newHistory = [...chatHistory, newMsg];
+    setChatHistory(newHistory);
+
+    setInboxList((prev) =>
+      prev.map((conv) => {
+        if (conv.id === activeConversationId) {
+          return {
+            ...conv,
+            lastMessage: replyText,
+            time: "Just now",
+            chatHistory: newHistory,
+            status: "open",
+            isStale: false
+          };
+        }
+        return conv;
+      })
+    );
+
+    setIsStale(false);
+
+    // Sync to database if conversation is db-backed
+    if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+      try {
+        await supabase.from("messages").insert({
+          conversation_id: activeConversationId,
+          business_id: dbBusiness.id,
+          role: "owner",
+          content: replyText
+        });
+
+        await supabase
+          .from("conversations")
+          .update({
+            last_message_at: new Date().toISOString(),
+            is_stale: false,
+            stale_detected_at: null,
+            status: "open"
+          })
+          .eq("id", activeConversationId);
+      } catch (dbErr) {
+        console.error("Failed to persist manual CRM reply to database:", dbErr);
+      }
+    }
+  };
+
+  // Start new chat with a random phone number
+  const startNewChat = async () => {
+    const randomPhone = generateRandomPhone();
+    const newConvId = `conv-${Date.now()}`;
+
+    let dbConvId = null;
+    if (dbBusiness) {
+      try {
+        // 1. Create Customer
+        const { data: customer } = await supabase
+          .from("customers")
+          .insert({
+            business_id: dbBusiness.id,
+            phone: randomPhone,
+            display_name: `Customer ${randomPhone.slice(-4)}`
+          })
+          .select()
+          .single();
+
+        if (customer) {
+          // 2. Create Conversation
+          const { data: conv } = await supabase
+            .from("conversations")
+            .insert({
+              business_id: dbBusiness.id,
+              customer_id: customer.id,
+              status: "open",
+              intent_score: 0.2,
+              estimated_value: 0,
+              last_message_content: "WhatsApp session started.",
+              last_message_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+          if (conv) {
+            dbConvId = conv.id;
+            // 3. Create Messages
+            await supabase.from("messages").insert([
+              {
+                conversation_id: conv.id,
+                business_id: dbBusiness.id,
+                role: "system",
+                content: `WhatsApp chat session initialized with ${businessName}.`
+              },
+              {
+                conversation_id: conv.id,
+                business_id: dbBusiness.id,
+                role: "agent",
+                content: `Hello! Welcome to ${businessName}. How can we help you today?`
+              }
+            ]);
+          }
+        }
+      } catch (dbErr) {
+        console.error("Failed to start new chat in DB:", dbErr);
+      }
+    }
+
+    const finalConvId = dbConvId || newConvId;
+
+    const newHistory: Message[] = [
+      {
+        sender: "system",
+        text: `WhatsApp chat session initialized with ${businessName}.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      },
+      {
+        sender: "agent",
+        text: `Hello! Welcome to ${businessName}. How can we help you today?`,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      }
+    ];
+
+    const newConv: Conversation = {
+      id: finalConvId,
+      phone: randomPhone,
+      lastMessage: "Session started.",
+      time: "Just now",
+      value: 0,
+      intent: 0.2,
+      status: "open",
+      chatHistory: newHistory,
+      sandboxTransaction: null,
+      pipelineLogs: null,
+      guardHarassmentCount: 0,
+      guardIsBlocked: false,
+      guardLastMessageHash: null,
+      guardRepeatCount: 0,
+      guardLastRepeatAt: null,
+      isStale: false
+    };
+
+    setInboxList(prev => [newConv, ...prev]);
+    setActiveConversationId(finalConvId);
+    setChatHistory(newHistory);
+    setGuardHarassmentCount(0);
+    setGuardIsBlocked(false);
+    setGuardLastMessageHash(null);
+    setGuardRepeatCount(0);
+    setGuardLastRepeatAt(null);
+    setIsStale(false);
+  };
+
+  // Manual unblock handler
+  const handleUnblock = async () => {
+    try {
+      await fetch(`/api/conversations/${activeConversationId}/unblock`, {
+        method: "PATCH"
+      });
+    } catch (e) {
+      console.warn("API unblock failed or skipped in sandbox:", e);
+    }
+
+    if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+      try {
+        await supabase
+          .from("conversations")
+          .update({
+            status: "open"
+          })
+          .eq("id", activeConversationId);
+      } catch (dbErr) {
+        console.error("Failed to update conversation status after unblocking in database:", dbErr);
+      }
+    }
+
+    setGuardIsBlocked(false);
+    setGuardHarassmentCount(0);
+    setGuardRepeatCount(0);
+    setGuardLastMessageHash(null);
+    setGuardLastRepeatAt(null);
+
+    const updatedHistory: Message[] = [
+      ...chatHistory,
+      {
+        sender: "system",
+        text: "🔓 Customer was manually unblocked by the owner.",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+      }
+    ];
+    setChatHistory(updatedHistory);
+
+    setInboxList((prev) =>
+      prev.map((c) =>
+        c.id === activeConversationId ? {
+          ...c,
+          status: "open",
+          lastMessage: "Customer unblocked",
+          chatHistory: updatedHistory,
+          guardIsBlocked: false,
+          guardHarassmentCount: 0,
+          guardRepeatCount: 0,
+          guardLastMessageHash: null,
+          guardLastRepeatAt: null
+        } : c
+      )
+    );
   };
 
   // Quick statistics
@@ -1020,8 +1975,8 @@ export default function DemoPage() {
                         setSetupKnowledgeText(tpl.knowledge);
                       }}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold text-center border transition-all ${setupTemplate === tpl.id
-                          ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400 shadow-sm"
-                          : "bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200"
+                        ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400 shadow-sm"
+                        : "bg-slate-950 border-slate-850 text-slate-400 hover:border-slate-800 hover:text-slate-200"
                         }`}
                     >
                       {tpl.label.split(" ")[0]}
@@ -1139,16 +2094,28 @@ export default function DemoPage() {
 
       <main className="max-w-7xl mx-auto px-6 py-8 grid lg:grid-cols-12 gap-8 relative z-10">
         {/* Left Side: WhatsApp Simulator */}
-        <section className="lg:col-span-5 flex flex-col gap-6">
-          <div className="flex flex-col gap-1.5">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-emerald-400" />
-              1. Customer Simulator
-            </h2>
-            <p className="text-xs text-slate-400">
-              Simulate customer chats. Tap presets to test multi-lingual queries or keysmash gibberish.
-            </p>
-          </div>
+        {activeTab !== "inbox" && (
+          <section className="lg:col-span-5 flex flex-col gap-6">
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                  <Smartphone className="w-5 h-5 text-emerald-400" />
+                  1. Customer Simulator
+                  <span className="text-[10px] bg-slate-900 border border-slate-800 text-slate-450 px-2 py-0.5 rounded font-mono font-normal">
+                    {inboxList.find((c) => c.id === activeConversationId)?.phone}
+                  </span>
+                </h2>
+                <button
+                  onClick={startNewChat}
+                  className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-xs font-mono font-bold transition-all shrink-0 cursor-pointer"
+                >
+                  + NEW CHAT
+                </button>
+              </div>
+              <p className="text-xs text-slate-400">
+                Simulate customer chats. Tap presets to test multi-lingual queries or keysmash gibberish.
+              </p>
+            </div>
 
           {/* Preset Queries panel */}
           <div className="flex flex-col gap-2 p-4 bg-slate-900/40 border border-slate-850 rounded-2xl">
@@ -1198,15 +2165,21 @@ export default function DemoPage() {
                   online
                 </span>
               </div>
-              <button
-                onClick={triggerStaleSimulation}
-                title="Simulate 2 hours passing without replies to trigger stale lead warning"
-                className="text-[10px] flex items-center gap-1 px-2 py-1 rounded bg-slate-900 border border-slate-850 text-slate-400 hover:text-white transition-all hover:bg-slate-850"
-              >
-                <Clock className="w-3 h-3 text-amber-500" />
-                +2 Hours
-              </button>
-            </div>
+              {enableStaleNudge && (
+                <button
+                  disabled={!chatHistory.some(m => m.sender === "customer")}
+                  onClick={triggerStaleSimulation}
+                  title={
+                    !chatHistory.some(m => m.sender === "customer")
+                      ? "Send a message from the customer first to start the conversation before simulating a stale lead"
+                      : `Simulate ${staleTimeLimit} minutes passing without replies to trigger stale lead warning`
+                  }
+                  className="text-[10px] flex items-center gap-1 px-2 py-1 rounded bg-slate-900 border border-slate-850 text-slate-400 hover:text-white transition-all hover:bg-slate-850 disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  <Clock className="w-3 h-3 text-amber-500" />
+                  +{staleTimeLimit} Mins
+                </button>
+              )}</div>
 
             {/* Chat Messages Body */}
             <div
@@ -1299,6 +2272,139 @@ export default function DemoPage() {
                   );
                 }
 
+                if (msg.transaction) {
+                  const tx = msg.transaction;
+                  const isConfirmed = tx.status === 'confirmed';
+
+                  return (
+                    <div key={index} className="flex flex-col items-start max-w-[85%] self-start my-2">
+                      <div className="bg-[#1f2c34] border border-slate-800 rounded-2xl rounded-tl-none p-4 shadow-md flex flex-col gap-3 w-full">
+                        {/* Header */}
+                        <div className="flex justify-between items-center pb-2 border-b border-slate-850">
+                          <div className="flex items-center gap-2">
+                            <span className="text-lg">
+                              {tx.type === 'appointment' ? '📅' : tx.type === 'order' ? '🛍️' : '💳'}
+                            </span>
+                            <div>
+                              <span className="text-xs font-bold text-white block">
+                                {tx.type === 'appointment' ? 'Appointment' : tx.type === 'order' ? 'Order' : 'Subscription'} {isConfirmed ? 'Confirmed' : 'in Progress'}
+                              </span>
+                              <span className="text-[8px] text-slate-500 font-mono tracking-wider">
+                                {isConfirmed ? '✓ AUTO-VERIFIED RECEIPT' : '⏳ COLLECTING DETAILS'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {tx.value > 0 && (
+                            <span className="text-xs font-mono font-bold text-emerald-400 bg-slate-950 px-2 py-0.5 border border-slate-850 rounded">
+                              ₹{tx.value}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Text reply */}
+                        <p className="text-xs text-slate-300 whitespace-pre-wrap font-sans leading-relaxed">{msg.text}</p>
+
+                        {/* Details Table */}
+                        <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-900 text-xs flex flex-col gap-2">
+                          {tx.type === 'appointment' && (
+                            <>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">SERVICE</span>
+                                <span className={`font-semibold ${tx.details?.service ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.service || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">DATE</span>
+                                <span className={`font-semibold ${tx.details?.date ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.date || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">TIME</span>
+                                <span className={`font-semibold ${tx.details?.time ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.time || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">NAME</span>
+                                <span className={`font-semibold ${tx.details?.name ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.name || 'missing'}
+                                </span>
+                              </div>
+                            </>
+                          )}
+
+                          {tx.type === 'order' && (
+                            <>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">PRODUCT</span>
+                                <span className={`font-semibold ${tx.details?.product ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.product || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">QUANTITY</span>
+                                <span className={`font-semibold ${tx.details?.quantity ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.quantity || 1}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">DELIVERY ADDRESS</span>
+                                <span className={`font-semibold text-right max-w-[150px] break-words ${tx.details?.address ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.address || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">NAME</span>
+                                <span className={`font-semibold ${tx.details?.name ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.name || 'missing'}
+                                </span>
+                              </div>
+                            </>
+                          )}
+
+                          {tx.type === 'subscription' && (
+                            <>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">MEMBERSHIP PLAN</span>
+                                <span className={`font-semibold ${tx.details?.plan ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.plan || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">EMAIL</span>
+                                <span className={`font-semibold text-right max-w-[150px] break-words ${tx.details?.email ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.email || 'missing'}
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500 font-mono text-[9px]">NAME</span>
+                                <span className={`font-semibold ${tx.details?.name ? "text-white" : "text-slate-700 italic"}`}>
+                                  {tx.details?.name || 'missing'}
+                                </span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Barcode Receipt Style for Confirmed Transactions */}
+                        {isConfirmed && (
+                          <div className="flex flex-col items-center gap-1.5 pt-2 border-t border-dashed border-slate-850 mt-1">
+                            <div className="h-6 w-full bg-[repeating-linear-gradient(90deg,#475569,#475569_2px,transparent_2px,transparent_6px)] opacity-50" />
+                            <span className="text-[7px] font-mono text-slate-500 tracking-[0.25em]">WAPI-TX-{(100000 + index).toString()}</span>
+                          </div>
+                        )}
+
+                        <span className="text-[8px] text-slate-400 block text-right font-mono -mt-1">
+                          {msg.timestamp}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                }
+
                 return (
                   <div key={index} className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}>
                     <div className={bubbleClass}>
@@ -1326,14 +2432,32 @@ export default function DemoPage() {
               <div ref={chatEndRef} />
             </div>
 
+            {/* Blocked Alert Banner inside Simulator */}
+            {guardIsBlocked && (
+              <div className="bg-red-500/10 border-t border-red-500/20 px-4 py-3 flex items-center justify-between gap-3 shrink-0">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                  <p className="text-[11px] text-red-300">
+                    Customer is blocked due to harassment. WhatsApp webhook is silently dropping their messages.
+                  </p>
+                </div>
+                <button
+                  onClick={handleUnblock}
+                  className="px-2.5 py-1 text-[10px] font-bold bg-red-600 text-white rounded hover:bg-red-500 transition-all cursor-pointer shrink-0"
+                >
+                  Unblock
+                </button>
+              </div>
+            )}
+
             {/* Input Footer */}
             <div className="bg-[#111b21] p-3 border-t border-slate-900 flex items-center gap-2 shrink-0">
               {recognitionSupported && (
                 <button
                   onClick={toggleListening}
                   className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${isListening
-                      ? "bg-rose-500 text-white animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]"
-                      : "bg-[#2a3942] text-slate-400 hover:text-white"
+                    ? "bg-rose-500 text-white animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.5)]"
+                    : "bg-[#2a3942] text-slate-400 hover:text-white"
                     }`}
                   title={isListening ? "Stop listening" : "Start voice command"}
                 >
@@ -1366,9 +2490,10 @@ export default function DemoPage() {
             </div>
           </div>
         </section>
+      )}
 
-        {/* Right Side: Wapi Portal & Workflow Logs */}
-        <section className="lg:col-span-7 flex flex-col gap-6">
+      {/* Right Side: Wapi Portal & Workflow Logs */}
+      <section className={`${activeTab === "inbox" ? "lg:col-span-12" : "lg:col-span-7"} flex flex-col gap-6`}>
           <div className="flex flex-col gap-1.5">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <Bot className="w-5 h-5 text-emerald-400" />
@@ -1408,12 +2533,12 @@ export default function DemoPage() {
                   <div>
                     <h4 className="text-sm font-bold text-white">Stale Lead Alert</h4>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      This customer has gone quiet for 2+ hours. Wapi generated a custom nudge follow-up.
+                      This customer has gone quiet for {staleTimeLimit} minutes. Wapi generated a custom nudge follow-up.
                     </p>
                   </div>
                 </div>
                 <span className="text-xs font-mono font-bold text-rose-400 bg-rose-500/10 border border-rose-500/25 px-2 py-0.5 rounded">
-                  ₹{inboxList.find((c) => c.id === "conv-1")?.value || 0} Lead
+                  ₹{inboxList.find((c) => c.id === activeConversationId)?.value || 0} Lead
                 </span>
               </div>
 
@@ -1453,19 +2578,19 @@ export default function DemoPage() {
           {/* Tabs header */}
           <div className="flex border-b border-slate-900 bg-slate-900/20 rounded-xl p-1 shrink-0">
             <button
-              onClick={() => setActiveTab("pipeline")}
-              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "pipeline"
-                  ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
+              onClick={() => setActiveTab("bookings")}
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "bookings"
+                ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
                 }`}
             >
-              <Bot className="w-4 h-4" /> Pipeline Inspector
+              <Calendar className="w-4 h-4" /> Bookings & Orders
             </button>
             <button
               onClick={() => setActiveTab("inbox")}
               className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "inbox"
-                  ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
+                ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
                 }`}
             >
               <MessageSquare className="w-4 h-4" /> CRM Queue Inbox
@@ -1473,11 +2598,20 @@ export default function DemoPage() {
             <button
               onClick={() => setActiveTab("knowledge")}
               className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "knowledge"
-                  ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
+                ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
                 }`}
             >
               <Database className="w-4 h-4" /> Custom Knowledge
+            </button>
+            <button
+              onClick={() => setActiveTab("pipeline")}
+              className={`flex-1 py-2 text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-all ${activeTab === "pipeline"
+                ? "bg-slate-900 text-emerald-400 border border-slate-800 shadow-sm"
+                : "text-slate-400 hover:text-slate-200"
+                }`}
+            >
+              <Bot className="w-4 h-4" /> Pipeline Inspector (Demo Purposes)
             </button>
           </div>
 
@@ -1485,6 +2619,155 @@ export default function DemoPage() {
           <div className="flex-1 min-h-[460px]">
             {activeTab === "pipeline" && (
               <div className="flex flex-col gap-4">
+                {/* Live Slot-Filling Tracker Card */}
+                {sandboxTransaction && (
+                  <div className="p-4 bg-indigo-950/20 border border-indigo-900/30 rounded-xl flex flex-col gap-2 shadow-[0_0_15px_rgba(99,102,241,0.02)]">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-indigo-400 font-mono flex items-center gap-1.5">
+                        ⚡ LIVE TRANSACTION SLOT-FILLING
+                      </span>
+                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded uppercase font-mono ${sandboxTransaction.status === 'confirmed'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                          : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 animate-pulse'
+                        }`}>
+                        {sandboxTransaction.status}
+                      </span>
+                    </div>
+                    <div className="bg-slate-950 p-3 rounded-lg border border-slate-900 flex flex-col gap-2">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="text-slate-500">Transaction Type:</span>
+                        <span className="text-white font-bold capitalize font-mono text-[10px]">
+                          {sandboxTransaction.type === 'appointment' ? '📅 Appointment' : sandboxTransaction.type === 'order' ? '🛍️ Order' : '💳 Subscription'}
+                        </span>
+                      </div>
+
+                      {/* Collected slots progress grid */}
+                      <div className="grid grid-cols-2 gap-2 mt-1.5 pt-2 border-t border-slate-900 text-xs">
+                        {sandboxTransaction.type === 'appointment' && (
+                          <>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.service ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.service ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Service:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.service}>
+                                {sandboxTransaction.details?.service || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.date ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.date ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Date:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.date}>
+                                {sandboxTransaction.details?.date || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.time ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.time ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Time:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.time}>
+                                {sandboxTransaction.details?.time || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.name ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.name ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Name:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.name}>
+                                {sandboxTransaction.details?.name || 'missing'}
+                              </span>
+                            </div>
+                          </>
+                        )}
+
+                        {sandboxTransaction.type === 'order' && (
+                          <>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.product ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.product ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Product:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.product}>
+                                {sandboxTransaction.details?.product || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.quantity ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.quantity ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Qty:</span>
+                              <span className="text-white font-medium">
+                                {sandboxTransaction.details?.quantity || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.address ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.address ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Address:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.address}>
+                                {sandboxTransaction.details?.address || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <span className={sandboxTransaction.details?.name ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.name ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Name:</span>
+                              <span className="text-white font-medium truncate max-w-[80px]" title={sandboxTransaction.details?.name}>
+                                {sandboxTransaction.details?.name || 'missing'}
+                              </span>
+                            </div>
+                          </>
+                        )}
+
+                        {sandboxTransaction.type === 'subscription' && (
+                          <>
+                            <div className="flex items-center gap-1.5 min-w-0 col-span-2">
+                              <span className={sandboxTransaction.details?.plan ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.plan ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Plan:</span>
+                              <span className="text-white font-medium truncate max-w-[150px]" title={sandboxTransaction.details?.plan}>
+                                {sandboxTransaction.details?.plan || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0 col-span-2">
+                              <span className={sandboxTransaction.details?.email ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.email ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Email:</span>
+                              <span className="text-white font-medium truncate max-w-[150px]" title={sandboxTransaction.details?.email}>
+                                {sandboxTransaction.details?.email || 'missing'}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 min-w-0 col-span-2">
+                              <span className={sandboxTransaction.details?.name ? "text-emerald-400" : "text-slate-600"}>
+                                {sandboxTransaction.details?.name ? "✓" : "✗"}
+                              </span>
+                              <span className="text-slate-500 font-mono text-[9px]">Name:</span>
+                              <span className="text-white font-medium truncate max-w-[150px]" title={sandboxTransaction.details?.name}>
+                                {sandboxTransaction.details?.name || 'missing'}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {sandboxTransaction.value > 0 && (
+                        <div className="flex justify-between items-center text-xs mt-1.5 pt-2 border-t border-slate-900 font-mono">
+                          <span className="text-slate-500">Inferred Value:</span>
+                          <span className="text-emerald-400 font-bold">₹{sandboxTransaction.value}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {!pipelineLogs ? (
                   <div className="flex flex-col items-center justify-center text-center p-12 border border-dashed border-slate-900 rounded-2xl bg-slate-900/10 min-h-[400px]">
                     <div className="w-12 h-12 rounded-xl bg-slate-900 flex items-center justify-center text-slate-500 mb-4 border border-slate-850">
@@ -1508,7 +2791,7 @@ export default function DemoPage() {
                       <div className="text-right">
                         <span className="text-[10px] font-mono text-slate-500 uppercase block">Confidence Gating</span>
                         <span className="text-xs font-mono font-bold text-slate-300">
-                          {Math.round(pipelineLogs.evaluation.confidence * 100)}%
+                          {Math.round((pipelineLogs.evaluation?.confidence ?? 0) * 100)}%
                         </span>
                       </div>
                     </div>
@@ -1587,11 +2870,11 @@ export default function DemoPage() {
                           <div>
                             <span className="text-[9px] text-slate-500 block uppercase font-mono">Intent Score</span>
                             <div className="flex items-center gap-2 mt-1">
-                              <span className="font-bold text-slate-200 font-mono">{pipelineLogs.evaluation.intentScore}</span>
+                              <span className="font-bold text-slate-200 font-mono">{pipelineLogs.evaluation?.intentScore ?? 0}</span>
                               <div className="flex-1 h-1.5 bg-slate-900 rounded-full overflow-hidden max-w-[80px]">
                                 <div
                                   className="h-full bg-emerald-500 rounded-full"
-                                  style={{ width: `${pipelineLogs.evaluation.intentScore * 100}%` }}
+                                  style={{ width: `${(pipelineLogs.evaluation?.intentScore ?? 0) * 100}%` }}
                                 ></div>
                               </div>
                             </div>
@@ -1599,7 +2882,7 @@ export default function DemoPage() {
                           <div>
                             <span className="text-[9px] text-slate-500 block uppercase font-mono">Estimated Lead Value</span>
                             <span className="font-bold text-emerald-400 text-sm mt-0.5 block">
-                              ₹{pipelineLogs.evaluation.estimatedValue}
+                              ₹{pipelineLogs.evaluation?.estimatedValue ?? 0}
                             </span>
                           </div>
                         </div>
@@ -1620,78 +2903,232 @@ export default function DemoPage() {
             {activeTab === "inbox" && (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between border-b border-slate-900 pb-3">
-                  <span className="text-xs font-mono text-slate-500">REAL-TIME PRIORITY INBOX QUEUE</span>
-                  <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-mono animate-pulse">
-                    LIVE UPDATE FEED
-                  </span>
+                  <span className="text-xs font-mono text-slate-500">REAL-TIME PRIORITY INBOX QUEUE & OPERATOR CONSOLE</span>
+                  <div className="flex items-center gap-3">
+                    <button
+                      onClick={startNewChat}
+                      className="px-2.5 py-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded text-xs font-mono font-bold transition-all shrink-0 cursor-pointer"
+                    >
+                      + NEW CHAT
+                    </button>
+                    <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-mono animate-pulse">
+                      LIVE UPDATE FEED
+                    </span>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-3">
-                  {inboxList.map((conv) => {
-                    const isActive = conv.id === "conv-1";
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[550px]">
+                  {/* Left Column: Conversation List */}
+                  <div className="lg:col-span-5 flex flex-col gap-3 overflow-y-auto pr-1 h-full max-h-[550px]">
+                    {inboxList.map((conv) => {
+                      const isActive = conv.id === activeConversationId;
 
-                    let cardBorder = "border-slate-900 hover:border-slate-800 bg-slate-900/20";
-                    let statusBadge = "";
+                      let cardBorder = "border-slate-900 hover:border-slate-800 bg-slate-900/20";
+                      let statusBadge = "";
 
-                    if (conv.status === "blocked") {
-                      cardBorder = "border-red-500/30 hover:border-red-500/50 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.05)]";
-                      statusBadge = "bg-red-500/10 text-red-400 border border-red-500/20";
-                    } else if (conv.status === "escalated") {
-                      cardBorder = "border-amber-500/20 hover:border-amber-500/40 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.02)]";
-                      statusBadge = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
-                    } else if (conv.status === "stale") {
-                      cardBorder = "border-rose-500/20 hover:border-rose-500/40 bg-rose-500/5 shadow-[0_0_15px_rgba(239,68,68,0.02)]";
-                      statusBadge = "bg-rose-500/10 text-rose-400 border border-rose-500/20";
-                    } else if (conv.status === "auto-handled") {
-                      cardBorder = "border-emerald-500/10 hover:border-emerald-500/20 bg-slate-900/20 opacity-80";
-                      statusBadge = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-                    } else {
-                      cardBorder = "border-emerald-500/20 hover:border-emerald-500/40 bg-emerald-500/5";
-                      statusBadge = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
-                    }
+                      if (conv.status === "blocked") {
+                        cardBorder = "border-red-500/30 hover:border-red-500/50 bg-red-500/5 shadow-[0_0_15px_rgba(239,68,68,0.05)]";
+                        statusBadge = "bg-red-500/10 text-red-400 border border-red-500/20";
+                      } else if (conv.status === "escalated") {
+                        cardBorder = "border-amber-500/20 hover:border-amber-500/40 bg-amber-500/5 shadow-[0_0_15px_rgba(245,158,11,0.02)]";
+                        statusBadge = "bg-amber-500/10 text-amber-400 border border-amber-500/20";
+                      } else if (conv.status === "stale") {
+                        cardBorder = "border-rose-500/20 hover:border-rose-500/40 bg-rose-500/5 shadow-[0_0_15px_rgba(239,68,68,0.02)]";
+                        statusBadge = "bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                      } else if (conv.status === "auto-handled") {
+                        cardBorder = "border-emerald-500/10 hover:border-emerald-500/20 bg-slate-900/20 opacity-80";
+                        statusBadge = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                      } else {
+                        cardBorder = "border-emerald-500/20 hover:border-emerald-500/40 bg-emerald-500/5";
+                        statusBadge = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                      }
 
-                    return (
-                      <div
-                        key={conv.id}
-                        className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all hover:scale-[1.01] ${cardBorder} ${isActive ? "ring-2 ring-emerald-500/30" : ""
-                          }`}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-                            <span className="text-xs font-bold text-white font-mono">{conv.phone}</span>
-                            {isActive && (
-                              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-mono">
-                                active chat
+                      return (
+                        <div
+                          key={conv.id}
+                          onClick={() => selectConversation(conv.id)}
+                          className={`p-3 rounded-xl border flex items-center justify-between gap-3 transition-all hover:scale-[1.01] cursor-pointer ${cardBorder} ${isActive ? "ring-2 ring-emerald-500/30" : ""
+                            }`}
+                        >
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                              <span className="text-[11px] font-bold text-white font-mono">{conv.phone}</span>
+                              {isActive && (
+                                <span className="text-[8px] bg-emerald-500/20 text-emerald-300 px-1 rounded font-mono">
+                                  active chat
+                                </span>
+                              )}
+                              <span className={`text-[8px] font-mono uppercase px-1.5 py-0.2 rounded ${statusBadge}`}>
+                                {conv.status === "blocked" ? "🚫 BLOCKED" : conv.status === "stale" ? "STALE LEAD" : conv.status}
                               </span>
-                            )}
-                            <span className={`text-[9px] font-mono uppercase px-2 py-0.2 rounded ${statusBadge}`}>
-                              {conv.status === "blocked" ? "🚫 BLOCKED" : conv.status === "stale" ? "STALE LEAD" : conv.status}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 truncate max-w-md">&quot;{conv.lastMessage}&#34;</p>
-
-                          {/* Intent indicator */}
-                          <div className="flex items-center gap-2 mt-2">
-                            <span className="text-[9px] text-slate-500 uppercase font-mono">Intent:</span>
-                            <div className="w-24 h-1 bg-slate-950 rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-emerald-400 rounded-full"
-                                style={{ width: `${conv.intent * 100}%` }}
-                              ></div>
                             </div>
-                            <span className="text-[9px] font-mono text-slate-400">{Math.round(conv.intent * 100)}%</span>
+                            <p className="text-[11px] text-slate-400 truncate max-w-[200px]">&quot;{conv.lastMessage}&#34;</p>
+
+                            {/* Intent indicator */}
+                            <div className="flex items-center gap-1.5 mt-1">
+                              <span className="text-[8px] text-slate-500 uppercase font-mono">Intent:</span>
+                              <div className="w-16 h-1 bg-slate-950 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-emerald-400 rounded-full"
+                                  style={{ width: `${conv.intent * 100}%` }}
+                                ></div>
+                              </div>
+                              <span className="text-[8px] font-mono text-slate-400">{Math.round(conv.intent * 100)}%</span>
+                            </div>
+                          </div>
+
+                          <div className="text-right flex flex-col items-end gap-0.5 shrink-0">
+                            <span className={`text-xs font-bold ${conv.value > 0 ? "text-emerald-400" : "text-slate-500"}`}>
+                              ₹{conv.value}
+                            </span>
+                            <span className="text-[8px] text-slate-500 font-mono mb-0.5">{conv.time}</span>
+                            {conv.status === "blocked" && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleUnblock();
+                                }}
+                                className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[8px] font-bold transition-all cursor-pointer"
+                              >
+                                Unblock
+                              </button>
+                            )}
                           </div>
                         </div>
+                      );
+                    })}
+                  </div>
 
-                        <div className="text-right flex flex-col items-end gap-1 shrink-0">
-                          <span className={`text-sm font-bold ${conv.value > 0 ? "text-emerald-400" : "text-slate-500"}`}>
-                            ₹{conv.value}
-                          </span>
-                          <span className="text-[9px] text-slate-500 font-mono">{conv.time}</span>
-                        </div>
+                  {/* Right Column: Active Conversation Chat Thread */}
+                  <div className="lg:col-span-7 bg-slate-950/40 border border-slate-900 rounded-2xl flex flex-col h-full overflow-hidden">
+                    {activeConversationId ? (
+                      (() => {
+                        const activeConv = inboxList.find(c => c.id === activeConversationId);
+                        if (!activeConv) return (
+                          <div className="flex-1 flex items-center justify-center text-xs text-slate-500 font-mono">
+                            Select a conversation to view chat history
+                          </div>
+                        );
+
+                        return (
+                          <div className="flex flex-col h-full">
+                            {/* Chat Header */}
+                            <div className="px-4 py-3 border-b border-slate-900 bg-slate-900/10 flex items-center justify-between shrink-0">
+                              <div className="min-w-0">
+                                <h4 className="text-xs font-bold text-white font-mono truncate">{activeConv.phone}</h4>
+                                <p className="text-[10px] text-slate-500 truncate">operator viewing mode</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {enableStaleNudge && (
+                                  <button
+                                    disabled={!activeConv.chatHistory?.some(m => m.sender === "customer")}
+                                    onClick={triggerStaleSimulation}
+                                    title={
+                                      !activeConv.chatHistory?.some(m => m.sender === "customer")
+                                        ? "Send a message from the customer first to start the conversation before simulating a stale lead"
+                                        : `Simulate ${staleTimeLimit} minutes passing without replies to trigger stale lead warning`
+                                    }
+                                    className="text-[10px] flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 border border-slate-850 text-slate-400 hover:text-white transition-all hover:bg-slate-850 disabled:opacity-40 disabled:pointer-events-none"
+                                  >
+                                    <Clock className="w-3.5 h-3.5 text-amber-500" />
+                                    +{staleTimeLimit} Mins
+                                  </button>
+                                )}
+                                <span className={`text-[9px] font-mono uppercase px-2 py-0.5 rounded ${activeConv.status === "blocked"
+                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                    : activeConv.status === "escalated"
+                                      ? "bg-amber-500/10 text-amber-400 border border-amber-500/20"
+                                      : activeConv.status === "stale"
+                                        ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                        : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                                  }`}>
+                                  {activeConv.status}
+                                </span>
+                                {activeConv.value > 0 && (
+                                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded font-mono">
+                                    ₹{activeConv.value}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Messages List */}
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3.5 flex flex-col">
+                              {activeConv.chatHistory && activeConv.chatHistory.length > 0 ? (
+                                activeConv.chatHistory.map((m, idx) => {
+                                  const isCustomer = m.sender === "customer";
+                                  const isOwner = m.sender === "owner";
+                                  const isSystem = m.sender === "system";
+
+                                  if (isSystem) {
+                                    return (
+                                      <div key={idx} className="self-center my-1 bg-slate-900/60 border border-slate-850 px-3 py-1 rounded text-[10px] text-slate-400 font-mono text-center max-w-[90%]">
+                                        {m.text}
+                                      </div>
+                                    );
+                                  }
+
+                                  return (
+                                    <div
+                                      key={idx}
+                                      className={`flex flex-col max-w-[80%] ${isCustomer ? "self-start items-start" : "self-end items-end"
+                                        }`}
+                                    >
+                                      <div
+                                        className={`p-2.5 rounded-xl text-xs leading-relaxed ${isCustomer
+                                            ? "bg-slate-900 border border-slate-850 text-slate-105 text-left rounded-tl-none"
+                                            : isOwner
+                                              ? "bg-emerald-600 text-slate-950 font-medium text-right rounded-tr-none"
+                                              : "bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 text-right rounded-tr-none"
+                                          }`}
+                                      >
+                                        <p>{m.text}</p>
+                                      </div>
+                                      <span className="text-[8px] font-mono text-slate-600 mt-1 uppercase">
+                                        {isCustomer ? "Customer" : isOwner ? "You (Owner)" : "Wapi Agent"} • {m.timestamp}
+                                      </span>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div className="flex-1 flex items-center justify-center text-[11px] text-slate-500 font-mono">
+                                  No message history available
+                                </div>
+                              )}
+                              <div ref={chatEndRef} />
+                            </div>
+
+                            {/* Reply Input Box */}
+                            <div className="p-3 border-t border-slate-900 bg-slate-950 flex gap-2 shrink-0">
+                              <input
+                                aria-label="Reply message"
+                                type="text"
+                                placeholder="Type a manual reply as business owner..."
+                                className="flex-1 bg-slate-900 border border-slate-850 rounded px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50"
+                                value={crmReplyMessage}
+                                onChange={(e) => setCrmReplyMessage(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    handleCrmSendReply();
+                                  }
+                                }}
+                              />
+                              <button
+                                onClick={handleCrmSendReply}
+                                className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold rounded transition-colors"
+                              >
+                                Send
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center text-xs text-slate-500 font-mono">
+                        Select a conversation to view chat history
                       </div>
-                    );
-                  })}
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1704,7 +3141,7 @@ export default function DemoPage() {
                 </div>
 
                 <div className="flex flex-col gap-4 bg-slate-900/40 p-4 border border-slate-900 rounded-xl">
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="flex flex-col gap-1">
                       <label className="text-[10px] font-mono text-slate-500 uppercase">Business Name</label>
                       <input
@@ -1724,6 +3161,33 @@ export default function DemoPage() {
                         onChange={(e) => setBusinessType(e.target.value)}
                         className="bg-slate-950 border border-slate-850 rounded px-2.5 py-1 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50"
                       />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-mono text-slate-500 uppercase">Stale Threshold</label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          aria-label="stale lead threshold"
+                          type="number"
+                          min={1}
+                          max={120}
+                          value={staleTimeLimit}
+                          onChange={(e) => setStaleTimeLimit(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-full bg-slate-950 border border-slate-850 rounded px-2.5 py-1 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500/50"
+                        />
+                        <span className="text-[10px] text-slate-500 font-mono">Mins</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-[10px] font-mono text-slate-500 uppercase">Stale Warnings</label>
+                      <button
+                        onClick={() => setEnableStaleNudge(!enableStaleNudge)}
+                        className={`w-full py-1 text-xs rounded font-bold border transition-all ${enableStaleNudge
+                          ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                          : "bg-slate-950 border-slate-850 text-slate-500"
+                          }`}
+                      >
+                        {enableStaleNudge ? "🟢 Enabled" : "🔴 Disabled"}
+                      </button>
                     </div>
                   </div>
 
@@ -1772,6 +3236,94 @@ export default function DemoPage() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+            {activeTab === "bookings" && (
+              <div className="flex flex-col gap-4">
+                <div className="p-4 bg-slate-900/40 border border-slate-900 rounded-xl flex items-center justify-between">
+                  <div>
+                    <h3 className="font-bold text-white text-sm">Simulated Transactions</h3>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      View all transactions processed during the simulation session.
+                    </p>
+                  </div>
+                  <span className="px-2 py-0.5 bg-slate-900 rounded border border-slate-880 text-[10px] text-slate-400 font-mono">
+                    Total: {completedTransactions.length}
+                  </span>
+                </div>
+
+                {completedTransactions.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center text-center p-12 border border-dashed border-slate-900 rounded-2xl bg-slate-900/10 min-h-[300px]">
+                    <div className="w-12 h-12 rounded-xl bg-slate-900 flex items-center justify-center text-slate-500 mb-4 border border-slate-850">
+                      <Calendar className="w-6 h-6" />
+                    </div>
+                    <h3 className="font-bold text-white text-sm">No bookings or orders yet</h3>
+                    <p className="text-xs text-slate-500 max-w-xs mt-1 leading-relaxed">
+                      Try ordering a product or booking an appointment in the simulator chat. Once the AI agent collects all details, it will confirm and list it here!
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-3 max-h-[500px] overflow-y-auto pr-1">
+                    {completedTransactions.map((tx, i) => (
+                      <div key={i} className="p-4 bg-slate-900/30 border border-slate-900 rounded-xl flex flex-col gap-2.5 relative overflow-hidden shadow-sm">
+                        <div className="absolute top-0 right-0 h-1.5 w-full bg-gradient-to-r from-emerald-500 to-teal-500" />
+                        <div className="flex justify-between items-start pt-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-base">
+                              {tx.type === 'appointment' ? '📅' : tx.type === 'order' ? '🛍️' : '💳'}
+                            </span>
+                            <div>
+                              <span className="text-xs font-bold text-white capitalize">{tx.type} Confirmed</span>
+                              <span className="text-[9px] text-slate-500 block font-mono">{tx.timestamp}</span>
+                            </div>
+                          </div>
+                          {tx.value > 0 && (
+                            <span className="text-xs font-mono font-bold text-emerald-400 bg-slate-950 px-2 py-0.5 border border-slate-850 rounded">
+                              ₹{tx.value}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-900 text-xs flex flex-col gap-1.5">
+                          {tx.type === 'appointment' && (
+                            <>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Service:</span> <span className="text-white font-medium">{tx.details?.service || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Date:</span> <span className="text-white font-medium">{tx.details?.date || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Time Slot:</span> <span className="text-white font-medium">{tx.details?.time || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Customer Name:</span> <span className="text-white font-medium">{tx.details?.name || tx.customerName || "Valued Customer"}</span></div>
+                              {(tx.details?.phone || tx.customerPhone) && (
+                                <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Phone:</span> <span className="text-white font-medium font-mono">{tx.details?.phone || tx.customerPhone}</span></div>
+                              )}
+                            </>
+                          )}
+
+                          {tx.type === 'order' && (
+                            <>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Product:</span> <span className="text-white font-medium">{tx.details?.product || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Quantity:</span> <span className="text-white font-medium">{tx.details?.quantity || 1}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Delivery Address:</span> <span className="text-white font-medium break-all text-right max-w-[150px]">{tx.details?.address || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Customer Name:</span> <span className="text-white font-medium">{tx.details?.name || tx.customerName || "Valued Customer"}</span></div>
+                              {(tx.details?.phone || tx.customerPhone) && (
+                                <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Phone:</span> <span className="text-white font-medium font-mono">{tx.details?.phone || tx.customerPhone}</span></div>
+                              )}
+                            </>
+                          )}
+
+                          {tx.type === 'subscription' && (
+                            <>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Plan Name:</span> <span className="text-white font-medium">{tx.details?.plan || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Customer Email:</span> <span className="text-white font-medium break-all text-right max-w-[150px]">{tx.details?.email || "N/A"}</span></div>
+                              <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Customer Name:</span> <span className="text-white font-medium">{tx.details?.name || tx.customerName || "Valued Customer"}</span></div>
+                              {(tx.details?.phone || tx.customerPhone) && (
+                                <div className="flex justify-between"><span className="text-slate-500 font-mono text-[9px]">Phone:</span> <span className="text-white font-medium font-mono">{tx.details?.phone || tx.customerPhone}</span></div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
