@@ -19,7 +19,7 @@ export default function Home() {
     <div className="relative min-h-screen bg-[#021820] text-slate-100 overflow-hidden font-sans">
       {/* ── BACKGROUND GRID & GLOW EFFECTS ── */}
       <div className="absolute inset-0 z-0 bg-[linear-gradient(to_right,rgba(6,182,212,0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgba(6,182,212,0.04)_1px,transparent_1px)] bg-[size:32px_32px] pointer-events-none" />
-      
+
       {/* Glowing atmospheric circles */}
       <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] rounded-full bg-cyan-600/15 blur-[120px] pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[700px] h-[700px] rounded-full bg-emerald-600/15 blur-[150px] pointer-events-none" />
@@ -44,10 +44,10 @@ export default function Home() {
 
       {/* ── HERO / SPLIT GRID LAYOUT ── */}
       <main className="relative z-10 max-w-7xl mx-auto px-6 py-8 md:px-12 md:py-20 grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
-        
+
         {/* LEFT COLUMN: TITLE & ACTIONS */}
         <div className="lg:col-span-7 flex flex-col gap-6 text-left">
-          
+
           {/* AI CRM Badge */}
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-cyan-500/20 bg-cyan-950/20 w-fit">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -104,7 +104,7 @@ export default function Home() {
 
         {/* RIGHT COLUMN: SIMULATORS & MOCKUPS */}
         <div className="lg:col-span-5 flex flex-col gap-6 w-full max-w-md mx-auto lg:mx-0">
-          
+
           {/* Mockup Card 1: WhatsApp Chat */}
           <div className="bg-[#0b1013] border border-white/10 rounded-2xl p-5 shadow-2xl shadow-cyan-950/40 relative overflow-hidden">
             {/* Header info */}
@@ -113,7 +113,7 @@ export default function Home() {
                 <span className="font-mono text-xs font-bold text-emerald-400">PS</span>
               </div>
               <div>
-                <h3 className="text-sm font-bold text-white leading-none">Priya's Salon</h3>
+                <h3 className="text-sm font-bold text-white leading-none">Priya&apos;s Salon</h3>
                 <div className="flex items-center gap-1.5 mt-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   <span className="text-[10px] text-emerald-400 font-mono">online</span>
@@ -126,7 +126,7 @@ export default function Home() {
               {/* Message 1: Customer */}
               <div className="bg-[#1e2528] rounded-xl rounded-tl-none p-3 max-w-[85%] self-start border border-white/5 transition duration-500">
                 <p className="text-xs md:text-sm text-slate-200">
-                  hi, what's the price for a bridal package?
+                  hi, what&apos;s the price for a bridal package?
                 </p>
               </div>
 

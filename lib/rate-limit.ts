@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
 import { NextResponse } from "next/server";
@@ -25,12 +26,12 @@ const createLimiter = (limit: number, window: string, prefix: string) => {
 };
 
 export const rateLimiters = {
-  webhook:       createLimiter(60, "1 m", "wapi:webhook"),
-  auth:          createLimiter(5, "15 m", "wapi:auth"),
-  documents:     createLimiter(10, "1 h", "wapi:documents"),
+  webhook: createLimiter(60, "1 m", "wapi:webhook"),
+  auth: createLimiter(5, "15 m", "wapi:auth"),
+  documents: createLimiter(10, "1 h", "wapi:documents"),
   conversations: createLimiter(120, "1 m", "wapi:conversations"),
-  reply:         createLimiter(30, "1 m", "wapi:reply"),
-  nudge:         createLimiter(5, "1 h", "wapi:nudge"),
+  reply: createLimiter(30, "1 m", "wapi:reply"),
+  nudge: createLimiter(5, "1 h", "wapi:nudge"),
 };
 
 export async function applyRateLimit(limiter: any, identifier: string) {
