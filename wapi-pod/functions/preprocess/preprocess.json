@@ -1,0 +1,6 @@
+{
+  "name": "preprocess",
+  "description": "Preprocesses the message to clean it and detect language.",
+  "type": "API",
+  "code": {"$file": "code.py"}
+}

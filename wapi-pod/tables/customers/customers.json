@@ -1,0 +1,10 @@
+{
+  "name": "customers",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "business_id", "type": "TEXT", "required": true },
+    { "name": "phone", "type": "TEXT", "required": true },
+    { "name": "name", "type": "TEXT" }
+  ]
+}

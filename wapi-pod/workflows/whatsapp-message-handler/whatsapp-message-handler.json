@@ -1,0 +1,55 @@
+{
+  "name": "whatsapp-message-handler",
+  "start": { "type": "MANUAL" },
+  "nodes": [
+    {
+      "id": "preprocess",
+      "type": "FUNCTION",
+      "label": "Preprocess Message",
+      "config": {
+        "function_name": "preprocess",
+        "input_mapping": {
+          "message": { "type": "expression", "value": "start.payload.message" }
+        }
+      }
+    },
+    {
+      "id": "infer",
+      "type": "AGENT",
+      "label": "AI Inference & RAG",
+      "config": {
+        "agent_name": "wapi-responder",
+        "input_mapping": {
+          "userMessage": { "type": "expression", "value": "start.payload.message" },
+          "detectedLanguage": { "type": "expression", "value": "preprocess.detectedLanguage" }
+        }
+      }
+    },
+    {
+      "id": "persist",
+      "type": "FUNCTION",
+      "label": "Persist State",
+      "config": {
+        "function_name": "persist",
+        "input_mapping": {
+          "business_id": { "type": "expression", "value": "start.payload.businessId" },
+          "customer_id": { "type": "expression", "value": "start.payload.customerId" },
+          "intent_score": { "type": "expression", "value": "infer.intent_score" },
+          "estimated_value": { "type": "expression", "value": "infer.estimated_value" },
+          "action": { "type": "expression", "value": "infer.action" },
+          "escalate_reason": { "type": "expression", "value": "infer.escalate_reason", "optional": true }
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "END",
+      "label": "Done"
+    }
+  ],
+  "edges": [
+    { "id": "e1", "source": "preprocess", "target": "infer" },
+    { "id": "e2", "source": "infer", "target": "persist" },
+    { "id": "e3", "source": "persist", "target": "end" }
+  ]
+}

@@ -1,26 +1,21 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Space_Mono } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
-});
-
-const spaceMono = Space_Mono({
-  variable: "--font-space-mono",
-  subsets: ["latin"],
-  weight: ["400", "700"],
+  weight: ["500"],
 });
 
 export const metadata: Metadata = {
-  title: "WAPI — AI CRM Layer for WhatsApp",
-  description: "An automated CRM priority stream integrating local RAG context, multilingual speech translation, intent evaluation, and stale lead cron triggers.",
+  title: "Wapi — Your inbox, but it thinks like you.",
+  description: "Wapi is an AI-powered WhatsApp CRM built for Indian small business owners — salons, clinics, tutoring centres, gyms, and local service providers.",
 };
 
 export default function RootLayout({
@@ -31,9 +26,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${spaceMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-black text-white">{children}</body>
+      <body className="min-h-full flex flex-col bg-[#0B3D52] text-slate-100">{children}</body>
     </html>
   );
 }

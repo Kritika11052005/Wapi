@@ -1,0 +1,18 @@
+{
+  "name": "conversations",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "business_id", "type": "TEXT", "required": true },
+    { "name": "customer_id", "type": "UUID", "required": true },
+    { "name": "status", "type": "ENUM", "default": "open", "options": ["open", "escalated", "closed"] },
+    { "name": "escalation_reason", "type": "TEXT" },
+    { "name": "intent_score", "type": "FLOAT" },
+    { "name": "estimated_value", "type": "INTEGER" },
+    { "name": "last_message_at", "type": "DATETIME" },
+    { "name": "last_message_hash", "type": "TEXT" },
+    { "name": "repeat_count", "type": "INTEGER", "default": 0 },
+    { "name": "last_repeat_at", "type": "DATETIME" },
+    { "name": "harassment_count", "type": "INTEGER", "default": 0 }
+  ]
+}

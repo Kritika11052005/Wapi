@@ -1,0 +1,10 @@
+{
+  "name": "nudges",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "conversation_id", "type": "UUID", "required": true },
+    { "name": "draft", "type": "TEXT", "required": true },
+    { "name": "sent", "type": "BOOLEAN", "default": false }
+  ]
+}

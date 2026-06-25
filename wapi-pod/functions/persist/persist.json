@@ -1,0 +1,15 @@
+{
+  "name": "persist",
+  "description": "Persists the conversation state to the datastore.",
+  "type": "API",
+  "code": {"$file": "code.py"},
+  "permissions": {
+    "grants": [
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "conversations",
+        "permission_ids": ["datastore.record.read", "datastore.record.write"]
+      }
+    ]
+  }
+}

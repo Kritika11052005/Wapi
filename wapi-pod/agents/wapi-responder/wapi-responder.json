@@ -1,0 +1,41 @@
+{
+  "name": "wapi-responder",
+  "description": "RAG-driven AI WhatsApp support agent with confidence/intent thresholding.",
+  "instruction": {"$file": "instruction.md"},
+  "toolsets": ["POD"],
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "confidence": { "type": "number" },
+      "intent_score": { "type": "number" },
+      "estimated_value": { "type": "integer" },
+      "action": { "type": "string", "enum": ["answer", "deflect", "escalate", "harassment", "silence"] },
+      "escalate_reason": { "type": "string", "enum": ["anger", "human_requested", "complaint", "transaction", "threat", "null"] },
+      "is_abusive": { "type": "boolean" },
+      "abuse_type": { "type": "string", "enum": ["sexual", "slur", "threat", "spam", "null"] },
+      "abuse_confidence": { "type": "number" },
+      "emoji_abuse_detected": { "type": "boolean" },
+      "offending_emojis": { "type": "string" },
+      "detected_language": { "type": "string" },
+      "transaction_detected": { "type": "boolean" },
+      "transaction_type": { "type": "string", "enum": ["appointment", "order", "subscription", "null"] },
+      "transaction_status": { "type": "string", "enum": ["collecting", "confirmed", "null"] },
+      "transaction_details": { "type": "object" }
+    },
+    "required": ["confidence", "intent_score", "action", "is_abusive"]
+  },
+  "permissions": {
+    "grants": [
+      {
+        "resource_type": "datastore_table",
+        "resource_name": "conversations",
+        "permission_ids": ["datastore.record.read"]
+      },
+      {
+        "resource_type": "folder",
+        "resource_name": "/knowledge",
+        "permission_ids": ["folder.read"]
+      }
+    ]
+  }
+}

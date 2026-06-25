@@ -1,0 +1,12 @@
+{
+  "name": "messages",
+  "primary_key_column": "id",
+  "enable_rls": false,
+  "columns": [
+    { "name": "conversation_id", "type": "UUID", "required": true },
+    { "name": "business_id", "type": "TEXT", "required": true },
+    { "name": "role", "type": "ENUM", "required": true, "options": ["customer", "agent", "system", "escalation"] },
+    { "name": "content", "type": "TEXT", "required": true },
+    { "name": "whatsapp_message_id", "type": "TEXT" }
+  ]
+}
