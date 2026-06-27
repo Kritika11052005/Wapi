@@ -7,6 +7,7 @@ import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/client";
+import { toast } from "sonner";
 import {
   MessageSquare,
   Bot,
@@ -27,7 +28,8 @@ import {
   Sliders,
   Building,
   RefreshCw,
-  Calendar
+  Calendar,
+  Trash2
 } from "lucide-react";
 
 interface Message {
@@ -65,6 +67,7 @@ interface Conversation {
   isStale?: boolean;
   leadIntel?: any;
   autoNudgeCount?: number;
+  lastMessageAt?: number;
 }
 
 interface PresetQuery {
@@ -259,6 +262,7 @@ function getInitialInboxForTemplate(
     guardLastRepeatAt: null,
     isStale: false,
     autoNudgeCount: 0,
+    lastMessageAt: Date.now(),
   };
 
   // Card 2: An open lead with high/medium intent
@@ -359,6 +363,7 @@ function getInitialInboxForTemplate(
     guardLastRepeatAt: null,
     isStale: false,
     autoNudgeCount: 0,
+    lastMessageAt: Date.now(),
   };
 
   const card3: Conversation = {
@@ -395,6 +400,7 @@ function getInitialInboxForTemplate(
     guardLastRepeatAt: null,
     isStale: false,
     autoNudgeCount: 0,
+    lastMessageAt: Date.now(),
   };
 
   return [card1, card2, card3];
@@ -533,7 +539,7 @@ export default function DemoPage() {
       setIsListening(true);
     } catch (err) {
       console.error("Failed to start voice capture:", err);
-      alert("Microphone access denied or unsupported format.");
+      toast.error("Microphone access denied or unsupported format.");
       setIsListening(false);
     }
   };
@@ -798,7 +804,8 @@ export default function DemoPage() {
                   guardRepeatCount: c.repeat_count || 0,
                   guardLastRepeatAt: c.last_repeat_at || null,
                   isStale: c.is_stale || false,
-                  autoNudgeCount: c.auto_nudge_count || 0
+                  autoNudgeCount: c.auto_nudge_count || 0,
+                  lastMessageAt: new Date(c.last_message_at || c.created_at).getTime()
                 };
               });
 
@@ -817,6 +824,35 @@ export default function DemoPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, isTyping]);
+
+  // Automatic background stale checker for Sandbox (10 seconds real-time represents 5 minutes/staleTimeLimit)
+  useEffect(() => {
+    if (!isSetupComplete || !enableStaleNudge) return;
+
+    const interval = setInterval(async () => {
+      const now = Date.now();
+      const secondsThreshold = staleTimeLimit * 10;
+
+      const activeConv = inboxList.find(c => c.id === activeConversationId);
+      if (!activeConv) return;
+      if (activeConv.status === "stale" || activeConv.isStale || activeConv.status === "blocked" || activeConv.status === "escalated") return;
+      if (!activeConv.chatHistory || activeConv.chatHistory.length === 0) return;
+
+      // Check if last message was from system
+      const lastMsg = activeConv.chatHistory[activeConv.chatHistory.length - 1];
+      if (lastMsg.sender === "system") return;
+
+      const lastMsgTime = activeConv.lastMessageAt || now;
+      const elapsedSeconds = (now - lastMsgTime) / 1000;
+
+      if (elapsedSeconds >= secondsThreshold && !isGeneratingNudge && !isTyping) {
+        console.log(`[Sandbox Auto-Nudge] Automatically triggering nudge because of ${elapsedSeconds.toFixed(1)}s of silence.`);
+        await triggerStaleSimulation();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [inboxList, activeConversationId, staleTimeLimit, enableStaleNudge, isSetupComplete, isGeneratingNudge, isTyping]);
 
   // Synchronize sandbox state (chats, inbox, bookings) to localStorage to persist across navigation/reload
   useEffect(() => {
@@ -1166,7 +1202,8 @@ export default function DemoPage() {
             lastMessage: isVoice ? "[Voice Note]" : text,
             time: "Just now",
             chatHistory: newHistory,
-            autoNudgeCount: 0
+            autoNudgeCount: 0,
+            lastMessageAt: Date.now()
           };
         }
         return conv;
@@ -1418,7 +1455,8 @@ export default function DemoPage() {
               time: "Just now",
               value: data.evaluation?.estimatedValue ?? conv.value,
               intent: data.evaluation?.intentScore ?? conv.intent,
-              status: data.status === "blocked" ? "blocked" : data.status
+              status: data.status === "blocked" ? "blocked" : data.status,
+              lastMessageAt: Date.now()
             };
           }
           return conv;
@@ -1575,7 +1613,7 @@ export default function DemoPage() {
   const triggerStaleSimulation = async () => {
     const hasCustomerMsg = chatHistory.some(m => m.sender === "customer");
     if (!hasCustomerMsg) {
-      alert("Please send a message from the customer first to start the conversation before simulating a stale lead.");
+      toast.error("Please send a message from the customer first to start the conversation before simulating a stale lead.");
       return;
     }
 
@@ -1626,7 +1664,8 @@ export default function DemoPage() {
                 autoNudgeCount: currentNudgeCount + 1,
                 status: "auto-handled",
                 time: "Just now",
-                isStale: false
+                isStale: false,
+                lastMessageAt: Date.now()
               };
             }
             return c;
@@ -1675,7 +1714,8 @@ export default function DemoPage() {
               ...conv,
               status: "stale" as const,
               time: `${staleTimeLimit}m ago`,
-              isStale: true
+              isStale: true,
+              lastMessageAt: Date.now()
             };
           }
           return conv;
@@ -1750,7 +1790,8 @@ export default function DemoPage() {
             status: "open",
             time: "Just now",
             isStale: false,
-            autoNudgeCount: 0
+            autoNudgeCount: 0,
+            lastMessageAt: Date.now()
           };
         }
         return conv;
@@ -1810,7 +1851,8 @@ export default function DemoPage() {
             chatHistory: newHistory,
             status: "open",
             isStale: false,
-            autoNudgeCount: 0
+            autoNudgeCount: 0,
+            lastMessageAt: Date.now()
           };
         }
         return conv;
@@ -2006,6 +2048,68 @@ export default function DemoPage() {
       )
     );
   };
+
+  // Delete conversation handler
+  const handleDeleteConversation = (convId: string) => {
+    toast.warning("Delete this conversation?", {
+      description: "This will permanently clear all its message logs and data.",
+      action: {
+        label: "Delete",
+        onClick: async () => {
+          try {
+            if (!convId.startsWith("conv-") && dbBusiness) {
+              // Delete messages first to maintain foreign key integrity
+              await supabase
+                .from("messages")
+                .delete()
+                .eq("conversation_id", convId);
+
+              // Delete nudges if any
+              await supabase
+                .from("nudges")
+                .delete()
+                .eq("conversation_id", convId);
+
+              // Delete transactions if any
+              await supabase
+                .from("transactions")
+                .delete()
+                .eq("conversation_id", convId);
+
+              // Delete the conversation itself
+              await supabase
+                .from("conversations")
+                .delete()
+                .eq("id", convId);
+            }
+
+            setInboxList((prev) => {
+              const filtered = prev.filter((c) => c.id !== convId);
+              if (activeConversationId === convId) {
+                if (filtered.length > 0) {
+                  setTimeout(() => selectConversation(filtered[0].id), 0);
+                } else {
+                  setActiveConversationId("");
+                  setChatHistory([]);
+                }
+              }
+              return filtered;
+            });
+            toast.success("Conversation deleted successfully!");
+          } catch (err: any) {
+            toast.error("Failed to delete conversation: " + err.message);
+          }
+        }
+      },
+      cancel: {
+        label: "Cancel",
+        onClick: () => {}
+      },
+      duration: 10000,
+    });
+  };
+
+
 
   // Quick statistics
   const statActive = inboxList.filter((c) => c.status !== "auto-handled").length;
@@ -3125,17 +3229,29 @@ export default function DemoPage() {
                               ₹{conv.value}
                             </span>
                             <span className="text-[8px] text-slate-500 font-mono mb-0.5">{conv.time}</span>
-                            {conv.status === "blocked" && (
+                            <div className="flex items-center gap-1.5 mt-1">
+                              {conv.status === "blocked" && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleUnblock();
+                                  }}
+                                  className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[8px] font-bold transition-all cursor-pointer"
+                                >
+                                  Unblock
+                                </button>
+                              )}
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleUnblock();
+                                  handleDeleteConversation(conv.id);
                                 }}
-                                className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[8px] font-bold transition-all cursor-pointer"
+                                className="p-1 rounded bg-slate-900/50 hover:bg-rose-950/80 text-slate-500 hover:text-rose-400 transition-all border border-slate-800/40 hover:border-rose-900/50 cursor-pointer"
+                                title="Delete Conversation"
                               >
-                                Unblock
+                                <Trash2 className="w-3.5 h-3.5" />
                               </button>
-                            )}
+                            </div>
                           </div>
                         </div>
                       );

@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/client";
+import { toast } from "sonner";
 import {
   MessageSquare,
   Bot,
@@ -20,7 +21,8 @@ import {
   Loader2,
   Search,
   AlertCircle,
-  HelpCircle
+  HelpCircle,
+  Trash2
 } from "lucide-react";
 
 export default function Dashboard() {
@@ -267,10 +269,79 @@ export default function Dashboard() {
         .single();
       if (error) throw error;
       setActiveTx(data);
-      alert(`Transaction marked as ${status}!`);
+      toast.success(`Transaction marked as ${status}!`);
     } catch (err: any) {
-      alert("Failed to update transaction: " + err.message);
+      toast.error("Failed to update transaction: " + err.message);
     }
+  };
+
+  // Delete conversation from database and local state
+  const handleDeleteConversation = (convId: string) => {
+    toast.warning("Delete this conversation?", {
+      description: "This will permanently clear all its message logs and data.",
+      action: {
+        label: "Delete",
+        onClick: async () => {
+          try {
+            // 1. Delete associated messages first
+            const { error: msgErr } = await supabase
+              .from("messages")
+              .delete()
+              .eq("conversation_id", convId);
+            if (msgErr) throw msgErr;
+
+            // 2. Delete nudges
+            const { error: nudgeErr } = await supabase
+              .from("nudges")
+              .delete()
+              .eq("conversation_id", convId);
+            if (nudgeErr) {
+              console.warn("Nudge delete error (possibly non-existent):", nudgeErr);
+            }
+
+            // 3. Delete transactions
+            const { error: txErr } = await supabase
+              .from("transactions")
+              .delete()
+              .eq("conversation_id", convId);
+            if (txErr) {
+              console.warn("Transactions delete error (possibly non-existent):", txErr);
+            }
+
+            // 4. Delete the conversation itself
+            const { error: convErr } = await supabase
+              .from("conversations")
+              .delete()
+              .eq("id", convId);
+            if (convErr) throw convErr;
+
+            // 5. Update local state
+            setConversations((prev) => {
+              const filtered = prev.filter((c) => c.id !== convId);
+              if (selectedConv?.id === convId) {
+                if (filtered.length > 0) {
+                  setSelectedConv(filtered[0]);
+                  setMessages([]);
+                } else {
+                  setSelectedConv(null);
+                  setMessages([]);
+                }
+              }
+              return filtered;
+            });
+
+            toast.success("Conversation deleted successfully!");
+          } catch (err: any) {
+            toast.error("Failed to delete conversation: " + err.message);
+          }
+        }
+      },
+      cancel: {
+        label: "Cancel",
+        onClick: () => {}
+      },
+      duration: 10000,
+    });
   };
 
   // Fetch or generate an AI nudge draft
@@ -344,7 +415,7 @@ export default function Dashboard() {
       fetchConversations(business.id, false);
       fetchLeadIntel(selectedConv.id);
     } catch (err: any) {
-      alert(err.message || "Failed to send manual reply.");
+      toast.error(err.message || "Failed to send manual reply.");
     } finally {
       setSendingReply(false);
     }
@@ -367,7 +438,7 @@ export default function Dashboard() {
       setMessages([]);
       fetchConversations(business.id, false);
     } catch (err: any) {
-      alert("Failed to resolve conversation: " + err.message);
+      toast.error("Failed to resolve conversation: " + err.message);
     }
   };
 
@@ -387,9 +458,9 @@ export default function Dashboard() {
       setSelectedConv(null);
       setMessages([]);
       await fetchConversations(business.id, false);
-      alert("Customer successfully unblocked!");
+      toast.success("Customer successfully unblocked!");
     } catch (err: any) {
-      alert(err.message || "Failed to unblock customer.");
+      toast.error(err.message || "Failed to unblock customer.");
     }
   };
 
@@ -419,7 +490,7 @@ export default function Dashboard() {
       fetchConversations(business.id, false);
       fetchLeadIntel(selectedConv.id);
     } catch (err: any) {
-      alert("Error sending nudge follow-up.");
+      toast.error("Error sending nudge follow-up.");
     } finally {
       setLoadingNudge(false);
     }
@@ -678,15 +749,27 @@ export default function Dashboard() {
                         )}
                       </div>
 
-                      {/* Intent score indicator bar */}
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <span className="text-[8px] font-mono text-slate-500">Intent: {Math.round((conv.intent_score || 0) * 100)}%</span>
-                        <div className="w-12 h-1 bg-slate-900 rounded-full overflow-hidden">
-                          <div
-                            className="bg-emerald-400 h-full"
-                            style={{ width: `${(conv.intent_score || 0) * 100}%` }}
-                          />
+                      {/* Intent score indicator bar & Delete Action */}
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <div className="flex items-center gap-1.5 font-mono">
+                          <span className="text-[8px] text-slate-500">Intent: {Math.round((conv.intent_score || 0) * 100)}%</span>
+                          <div className="w-12 h-1 bg-slate-905 rounded-full overflow-hidden">
+                            <div
+                              className="bg-emerald-400 h-full"
+                              style={{ width: `${(conv.intent_score || 0) * 100}%` }}
+                            />
+                          </div>
                         </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteConversation(conv.id);
+                          }}
+                          className="p-1 rounded bg-slate-950 hover:bg-rose-950/80 text-slate-500 hover:text-rose-400 transition-all border border-slate-900 hover:border-rose-900/50 cursor-pointer"
+                          title="Delete Conversation"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
                     </div>
                   </div>

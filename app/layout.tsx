@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Space_Grotesk } from "next/font/google";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 const inter = Inter({
@@ -28,7 +29,10 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${spaceGrotesk.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-[#0B3D52] text-slate-100">{children}</body>
+      <body className="min-h-full flex flex-col bg-[#0B3D52] text-slate-100">
+        {children}
+        <Toaster richColors theme="dark" position="top-center" />
+      </body>
     </html>
   );
 }
