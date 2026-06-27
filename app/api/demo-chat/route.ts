@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextResponse } from "next/server";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { preprocessCustomerMessage } from "@/lib/agent/preprocessor";
@@ -28,12 +29,12 @@ function checkSafetyAndGetText(result: any): string {
   if (!result || !result.response) {
     throw new Error("No response returned from the model.");
   }
-  
+
   const blockReason = result.response.promptFeedback?.blockReason;
   if (blockReason) {
     throw new Error(`PROHIBITED_CONTENT: ${blockReason}`);
   }
-  
+
   return result.response.text().trim();
 }
 
@@ -76,11 +77,11 @@ function handleSafetyBlock(
 
 export async function POST(request: Request) {
   try {
-    const { 
-      message, 
-      chatHistory = [], 
-      documentText, 
-      businessName, 
+    const {
+      message,
+      chatHistory = [],
+      documentText,
+      businessName,
       businessType,
       audio,
       mimeType,
@@ -224,6 +225,7 @@ Do NOT include any markdown code blocks, backticks, or any text other than the J
         return NextResponse.json({ error: "Could not transcribe audio. Speech was unclear or empty." }, { status: 400 });
       }
 
+      finalMessage = transcribedText;
     }
 
     // ═══════════════════════════════════════════════
