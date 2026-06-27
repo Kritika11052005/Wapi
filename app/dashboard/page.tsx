@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
@@ -42,6 +42,29 @@ export default function Dashboard() {
   const [activeNudge, setActiveNudge] = useState<any>(null);
   const [nudgeDraft, setNudgeDraft] = useState("");
   const [loadingNudge, setLoadingNudge] = useState(false);
+
+  // Lead intelligence state
+  const [intel, setIntel] = useState<any>(null);
+  const [loadingIntel, setLoadingIntel] = useState(false);
+
+  const fetchLeadIntel = useCallback(async (convId: string) => {
+    setLoadingIntel(true);
+    try {
+      const res = await fetch("/api/lead-intel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId: convId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIntel(data);
+      }
+    } catch (err) {
+      console.error("Error fetching lead intel:", err);
+    } finally {
+      setLoadingIntel(false);
+    }
+  }, []);
 
   // UI filter & search states
   const [filter, setFilter] = useState("all"); // 'all' | 'open' | 'escalated' | 'stale' | 'resolved'
@@ -134,6 +157,7 @@ export default function Dashboard() {
               if (prev.some((m) => m.id === payload.new.id)) return prev;
               return [...prev, payload.new];
             });
+            fetchLeadIntel(selectedConv.id);
           }
           fetchConversations(business.id, false);
         }
@@ -144,7 +168,7 @@ export default function Dashboard() {
       supabase.removeChannel(convChannel);
       supabase.removeChannel(msgChannel);
     };
-  }, [business, selectedConv]);
+  }, [business, selectedConv, fetchLeadIntel]);
 
   // Fetch all conversations and calculate live metrics
   const fetchConversations = async (bizId: string, showSpinner = true) => {
@@ -226,6 +250,9 @@ export default function Dashboard() {
     if (conv.is_stale) {
       fetchNudge(conv.id);
     }
+
+    // Fetch lead intelligence
+    fetchLeadIntel(conv.id);
   };
 
   // Update transaction status manually
@@ -315,6 +342,7 @@ export default function Dashboard() {
       // Optimistically append owner message
       setMessages((prev) => [...prev, data.message]);
       fetchConversations(business.id, false);
+      fetchLeadIntel(selectedConv.id);
     } catch (err: any) {
       alert(err.message || "Failed to send manual reply.");
     } finally {
@@ -389,6 +417,7 @@ export default function Dashboard() {
       // Refresh message thread and list
       selectConversation(selectedConv);
       fetchConversations(business.id, false);
+      fetchLeadIntel(selectedConv.id);
     } catch (err: any) {
       alert("Error sending nudge follow-up.");
     } finally {
@@ -671,208 +700,276 @@ export default function Dashboard() {
         <main className="flex-1 flex flex-col overflow-hidden bg-slate-950">
 
           {selectedConv ? (
-            <div className="flex-1 flex flex-col overflow-hidden h-full">
+            <div className="flex-1 flex overflow-hidden h-full">
+              {/* CHAT CONTAINER */}
+              <div className="flex-1 flex flex-col overflow-hidden h-full border-r border-slate-900">
+                {/* Conversation Header */}
+                <div className="border-b border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center justify-between shrink-0">
+                  <div className="flex flex-col">
+                    <h3 className="text-base font-bold text-white font-mono">{selectedConv.customers?.phone}</h3>
+                    <p className="text-xs text-slate-400">
+                      Status: <span className="capitalize text-slate-300 font-semibold">{selectedConv.status}</span>
+                      {selectedConv.estimated_value > 0 && ` · Est. Value: ₹${selectedConv.estimated_value}`}
+                    </p>
+                  </div>
 
-              {/* Conversation Header */}
-              <div className="border-b border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center justify-between shrink-0">
-                <div className="flex flex-col">
-                  <h3 className="text-base font-bold text-white font-mono">{selectedConv.customers?.phone}</h3>
-                  <p className="text-xs text-slate-400">
-                    Status: <span className="capitalize text-slate-300 font-semibold">{selectedConv.status}</span>
-                    {selectedConv.estimated_value > 0 && ` · Est. Value: ₹${selectedConv.estimated_value}`}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    {selectedConv.status === "blocked" && (
+                      <button
+                        onClick={unblockCustomer}
+                        className="px-4 py-2 rounded-lg bg-red-950/20 border border-red-900/30 hover:bg-red-900/10 text-xs font-semibold text-red-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        🚫 Unblock Customer
+                      </button>
+                    )}
+                    {selectedConv.status !== "resolved" && selectedConv.status !== "blocked" && (
+                      <button
+                        onClick={resolveConversation}
+                        className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-xs font-semibold text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Mark Resolved
+                      </button>
+                    )}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  {selectedConv.status === "blocked" && (
-                    <button
-                      onClick={unblockCustomer}
-                      className="px-4 py-2 rounded-lg bg-red-950/20 border border-red-900/30 hover:bg-red-900/10 text-xs font-semibold text-red-400 flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      🚫 Unblock Customer
-                    </button>
-                  )}
-                  {selectedConv.status !== "resolved" && selectedConv.status !== "blocked" && (
-                    <button
-                      onClick={resolveConversation}
-                      className="px-4 py-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-xs font-semibold text-slate-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> Mark Resolved
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Transaction Banner */}
-              {activeTx && (
-                <div className={`px-4 py-3 border-b flex items-center justify-between z-10 text-xs shrink-0 ${
-                  activeTx.status === 'confirmed'
-                    ? 'bg-emerald-950/20 border-emerald-900/30 text-emerald-400'
-                    : activeTx.status === 'cancelled'
-                      ? 'bg-red-950/20 border-red-900/30 text-red-400'
-                      : 'bg-indigo-950/20 border-indigo-900/30 text-indigo-400'
-                }`}>
-                  <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                    {activeTx.type === 'appointment' && <span className="text-sm shrink-0">📅</span>}
-                    {activeTx.type === 'order' && <span className="text-sm shrink-0">🛍️</span>}
-                    {activeTx.type === 'subscription' && <span className="text-sm shrink-0">💳</span>}
-                    <div className="truncate">
-                      <span className="font-bold uppercase tracking-wider text-[9px] font-mono mr-1.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800">
-                        {activeTx.type}: {activeTx.status}
-                      </span>
-                      <span className="text-slate-300">
-                        {activeTx.type === 'appointment' && `${activeTx.details?.service || 'Appointment'} - Date: ${activeTx.details?.date || 'N/A'}, Time: ${activeTx.details?.time || 'N/A'}`}
-                        {activeTx.type === 'order' && `${activeTx.details?.product || 'Product'} (Qty: ${activeTx.details?.quantity || 1}) - Deliver: ${activeTx.details?.address || 'N/A'}`}
-                        {activeTx.type === 'subscription' && `${activeTx.details?.plan || 'Plan'} membership (Email: ${activeTx.details?.email || 'N/A'})`}
-                      </span>
-                      {activeTx.value > 0 && (
-                        <span className="ml-2 font-mono font-bold text-emerald-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
-                          ₹{activeTx.value}
+                {/* Transaction Banner */}
+                {activeTx && (
+                  <div className={`px-4 py-3 border-b flex items-center justify-between z-10 text-xs shrink-0 ${
+                    activeTx.status === 'confirmed'
+                      ? 'bg-emerald-950/20 border-emerald-900/30 text-emerald-400'
+                      : activeTx.status === 'cancelled'
+                        ? 'bg-red-950/20 border-red-900/30 text-red-400'
+                        : 'bg-indigo-950/20 border-indigo-900/30 text-indigo-400'
+                  }`}>
+                    <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                      {activeTx.type === 'appointment' && <span className="text-sm shrink-0">📅</span>}
+                      {activeTx.type === 'order' && <span className="text-sm shrink-0">🛍️</span>}
+                      {activeTx.type === 'subscription' && <span className="text-sm shrink-0">💳</span>}
+                      <div className="truncate">
+                        <span className="font-bold uppercase tracking-wider text-[9px] font-mono mr-1.5 px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800">
+                          {activeTx.type}: {activeTx.status}
                         </span>
-                      )}
-                    </div>
-                  </div>
-                  {activeTx.status === 'collecting' && (
-                    <div className="flex gap-1.5 shrink-0 ml-2">
-                      <button
-                        onClick={() => handleUpdateTxStatus('confirmed')}
-                        className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold tracking-tight cursor-pointer"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => handleUpdateTxStatus('cancelled')}
-                        className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Chat Thread */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                {messages.length === 0 ? (
-                  <div className="flex items-center justify-center h-full text-slate-600 font-mono text-xs">
-                    Fetching message history...
-                  </div>
-                ) : (
-                  messages.map((m) => {
-                    const isCustomer = m.role === "customer";
-                    const isOwner = m.role === "owner";
-                    const isEscalation = m.role === "escalation";
-
-                    return (
-                      <div
-                        key={m.id}
-                        className={`flex flex-col max-w-[70%] ${isCustomer ? "mr-auto items-start" : "ml-auto items-end"
-                          }`}
-                      >
-                        {/* Bubble */}
-                        <div
-                          className={`p-4 rounded-2xl text-sm leading-relaxed ${isCustomer
-                              ? "bg-slate-900 border border-slate-850 text-slate-100 rounded-tl-sm"
-                              : isOwner
-                                ? "bg-slate-100 text-slate-950 font-medium rounded-tr-sm"
-                                : isEscalation
-                                  ? "bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-tr-sm"
-                                  : "bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 rounded-tr-sm"
-                            }`}
-                        >
-                          <p>{m.content}</p>
-                        </div>
-
-                        {/* Meta */}
-                        <span className="text-[9px] font-mono text-slate-600 mt-1 uppercase tracking-wider">
-                          {isCustomer ? "Customer" : isOwner ? "You" : isEscalation ? "Escalation Alert" : "Wapi Agent"}
-                          {parseFloat(m.confidence_score) > 0 && ` (Conf: ${Math.round(m.confidence_score * 100)}%)`}
+                        <span className="text-slate-300">
+                          {activeTx.type === 'appointment' && `${activeTx.details?.service || 'Appointment'} - Date: ${activeTx.details?.date || 'N/A'}, Time: ${activeTx.details?.time || 'N/A'}`}
+                          {activeTx.type === 'order' && `${activeTx.details?.product || 'Product'} (Qty: ${activeTx.details?.quantity || 1}) - Deliver: ${activeTx.details?.address || 'N/A'}`}
+                          {activeTx.type === 'subscription' && `${activeTx.details?.plan || 'Plan'} membership (Email: ${activeTx.details?.email || 'N/A'})`}
                         </span>
+                        {activeTx.value > 0 && (
+                          <span className="ml-2 font-mono font-bold text-emerald-400 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                            ₹{activeTx.value}
+                          </span>
+                        )}
                       </div>
-                    );
-                  })
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* STALE LEAD NUDGE PANEL */}
-              {selectedConv.is_stale && selectedConv.status !== "resolved" && (
-                <div className="border-t border-slate-900 bg-slate-900/40 p-5 flex flex-col gap-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-rose-400 animate-pulse shrink-0" />
-                      <span className="text-xs font-bold text-rose-400">⚠️ Stale Lead Warning (Went quiet for 2+ hours)</span>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={handleDismissNudge}
-                        className="text-[10px] uppercase font-bold text-slate-500 hover:text-slate-300 transition-colors"
-                      >
-                        Dismiss
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-2">
-                    <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">AI-Drafted Response suggestion</span>
-                    {loadingNudge ? (
-                      <div className="h-14 bg-slate-950 rounded-lg flex items-center justify-center">
-                        <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
-                      </div>
-                    ) : (
-                      <div className="flex gap-2">
-                        <textarea
-                          aria-label="text"
-                          rows={2}
-                          value={nudgeDraft}
-                          onChange={(e) => setNudgeDraft(e.target.value)}
-                          className="flex-1 px-3 py-2 text-xs rounded-lg bg-slate-950 border border-slate-900 text-slate-300 focus:outline-none focus:border-rose-500 font-sans"
-                        />
+                    {activeTx.status === 'collecting' && (
+                      <div className="flex gap-1.5 shrink-0 ml-2">
                         <button
-                          onClick={handleSendNudge}
-                          disabled={!nudgeDraft.trim()}
-                          className="px-4 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          onClick={() => handleUpdateTxStatus('confirmed')}
+                          className="px-2.5 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold tracking-tight cursor-pointer"
                         >
-                          <Send className="w-3.5 h-3.5" /> Send Nudge
+                          Confirm
+                        </button>
+                        <button
+                          onClick={() => handleUpdateTxStatus('cancelled')}
+                          className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-semibold cursor-pointer"
+                        >
+                          Cancel
                         </button>
                       </div>
                     )}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* MANUAL REPLY COMPOSER */}
-              {selectedConv.status !== "resolved" && (
-                <form
-                  onSubmit={handleSendReply}
-                  className="border-t border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center gap-3 shrink-0"
-                >
-                  <textarea
-                    rows={1}
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    placeholder="Type a manual response... (Bypasses AI)"
-                    className="flex-1 px-4 py-3 rounded-xl bg-slate-900 border border-slate-850 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 transition-colors resize-none font-sans"
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSendReply(e);
-                      }
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    disabled={!replyText.trim() || sendingReply}
-                    className="w-12 h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 flex items-center justify-center hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 cursor-pointer"
+                {/* Chat Thread */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                  {messages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-slate-600 font-mono text-xs">
+                      Fetching message history...
+                    </div>
+                  ) : (
+                    messages.map((m) => {
+                      const isCustomer = m.role === "customer";
+                      const isOwner = m.role === "owner";
+                      const isEscalation = m.role === "escalation";
+
+                      return (
+                        <div
+                          key={m.id}
+                          className={`flex flex-col max-w-[70%] ${isCustomer ? "mr-auto items-start" : "ml-auto items-end"
+                            }`}
+                        >
+                          {/* Bubble */}
+                          <div
+                            className={`p-4 rounded-2xl text-sm leading-relaxed ${isCustomer
+                                ? "bg-slate-900 border border-slate-850 text-slate-100 rounded-tl-sm"
+                                : isOwner
+                                  ? "bg-slate-100 text-slate-950 font-medium rounded-tr-sm"
+                                  : isEscalation
+                                    ? "bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-tr-sm"
+                                    : "bg-emerald-950/20 border border-emerald-900/30 text-emerald-400 rounded-tr-sm"
+                              }`}
+                          >
+                            <p>{m.content}</p>
+                          </div>
+
+                          {/* Meta */}
+                          <span className="text-[9px] font-mono text-slate-600 mt-1 uppercase tracking-wider">
+                            {isCustomer ? "Customer" : isOwner ? "You" : isEscalation ? "Escalation Alert" : "Wapi Agent"}
+                            {parseFloat(m.confidence_score) > 0 && ` (Conf: ${Math.round(m.confidence_score * 100)}%)`}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+
+                {/* STALE LEAD NUDGE PANEL */}
+                {selectedConv.is_stale && selectedConv.status !== "resolved" && (
+                  <div className="border-t border-slate-900 bg-slate-900/40 p-5 flex flex-col gap-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-rose-400 animate-pulse shrink-0" />
+                        <span className="text-xs font-bold text-rose-400">⚠️ Stale Lead Warning (Went quiet for 2+ hours)</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={handleDismissNudge}
+                          className="text-[10px] uppercase font-bold text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                      <span className="text-[10px] uppercase tracking-wider font-bold text-slate-500">AI-Drafted Response suggestion</span>
+                      {loadingNudge ? (
+                        <div className="h-14 bg-slate-950 rounded-lg flex items-center justify-center">
+                          <Loader2 className="w-4 h-4 text-emerald-400 animate-spin" />
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <textarea
+                            aria-label="text"
+                            rows={2}
+                            value={nudgeDraft}
+                            onChange={(e) => setNudgeDraft(e.target.value)}
+                            className="flex-1 px-3 py-2 text-xs rounded-lg bg-slate-950 border border-slate-900 text-slate-300 focus:outline-none focus:border-rose-500 font-sans"
+                          />
+                          <button
+                            onClick={handleSendNudge}
+                            disabled={!nudgeDraft.trim()}
+                            className="px-4 bg-rose-500 hover:bg-rose-600 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                          >
+                            <Send className="w-3.5 h-3.5" /> Send Nudge
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* MANUAL REPLY COMPOSER */}
+                {selectedConv.status !== "resolved" && (
+                  <form
+                    onSubmit={handleSendReply}
+                    className="border-t border-slate-900 p-4 bg-slate-950/80 backdrop-blur-md flex items-center gap-3 shrink-0"
                   >
-                    {sendingReply ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Send className="w-4 h-4" />
+                    <textarea
+                      rows={1}
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      placeholder="Type a manual response... (Bypasses AI)"
+                      className="flex-1 px-4 py-3 rounded-xl bg-slate-900 border border-slate-850 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 transition-colors resize-none font-sans"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendReply(e);
+                        }
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      disabled={!replyText.trim() || sendingReply}
+                      className="w-12 h-12 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-slate-950 flex items-center justify-center hover:brightness-110 active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 cursor-pointer"
+                    >
+                      {sendingReply ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {/* LEAD INTELLIGENCE PANEL (Right Sidebar) */}
+              <aside className="hidden lg:flex w-80 bg-slate-950/40 p-5 flex-col gap-5 overflow-y-auto shrink-0 z-10 relative">
+                <div className="absolute inset-0 bg-gradient-to-b from-slate-950 via-slate-950/90 to-slate-950 pointer-events-none" />
+                <div className="relative z-10 flex flex-col gap-5">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-900">
+                    <div className="flex items-center gap-2">
+                      <Bot className="w-4 h-4 text-emerald-400" />
+                      <span className="font-mono text-xs uppercase tracking-wider text-slate-400 font-bold">Lead Intelligence</span>
+                    </div>
+                    {intel?.leadWarmth && (
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider font-mono ${
+                        intel.leadWarmth === 'Hot'
+                          ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                          : intel.leadWarmth === 'Warm'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+                      }`}>
+                        {intel.leadWarmth} Lead
+                      </span>
                     )}
-                  </button>
-                </form>
-              )}
+                  </div>
+
+                  {loadingIntel ? (
+                    <div className="flex flex-col gap-4 py-8">
+                      <div className="h-4 bg-slate-900/60 rounded animate-pulse w-3/4" />
+                      <div className="h-16 bg-slate-900/60 rounded animate-pulse" />
+                      <div className="h-4 bg-slate-900/60 rounded animate-pulse w-1/2" />
+                      <div className="h-20 bg-slate-900/60 rounded animate-pulse" />
+                    </div>
+                  ) : intel ? (
+                    <>
+                      <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-4 flex flex-col gap-2">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Conversation Summary</span>
+                        <p className="text-xs text-slate-300 leading-relaxed font-sans">{intel.summary}</p>
+                      </div>
+
+                      <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-4 flex flex-col gap-2">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Promised / Agreed</span>
+                        <p className="text-xs text-slate-300 leading-relaxed font-mono bg-slate-950 p-2 rounded border border-slate-900/80">
+                          {intel.promised || "Nothing promised yet."}
+                        </p>
+                      </div>
+
+                      <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-4 flex flex-col gap-3">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Suggested Next Actions</span>
+                        <div className="flex flex-col gap-2.5">
+                          {intel.nextActions?.map((action: string, idx: number) => (
+                            <div key={idx} className="flex gap-2.5 items-start">
+                              <span className="w-4 h-4 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shrink-0 text-[10px] font-mono font-bold">
+                                {idx + 1}
+                              </span>
+                              <span className="text-xs text-slate-300 leading-normal font-sans">{action}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="py-8 text-center flex flex-col items-center justify-center gap-2">
+                      <HelpCircle className="w-8 h-8 text-slate-800" />
+                      <p className="text-xs text-slate-600 font-mono">No intelligence compiled for this lead yet.</p>
+                    </div>
+                  )}
+                </div>
+              </aside>
             </div>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-center p-6">

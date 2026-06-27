@@ -419,6 +419,7 @@ export async function POST(request: Request) {
     estimated_value: score.estimated_value,
     status: action === "escalate" ? "escalated" : "open",
     is_stale: false, // Reset stale state on new message
+    auto_nudge_count: 0,
     last_message_at: new Date().toISOString(),
   };
 

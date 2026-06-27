@@ -149,6 +149,7 @@ export async function POST(request: Request) {
         is_stale: false,
         status: "open",
         last_message_at: new Date().toISOString(),
+        auto_nudge_count: 0,
       })
       .eq("id", conversationId);
 
@@ -169,6 +170,7 @@ export async function POST(request: Request) {
       .from("conversations")
       .update({
         is_stale: false,
+        auto_nudge_count: 0,
       })
       .eq("id", conversationId);
 

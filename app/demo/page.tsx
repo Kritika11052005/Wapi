@@ -31,7 +31,7 @@ import {
 } from "lucide-react";
 
 interface Message {
-  sender: "customer" | "agent" | "owner" | "system";
+  sender: "customer" | "agent" | "owner" | "system" | "auto-nudge";
   text: string;
   timestamp: string;
   isVoiceNote?: boolean;
@@ -63,6 +63,8 @@ interface Conversation {
   guardRepeatCount?: number;
   guardLastRepeatAt?: string | null;
   isStale?: boolean;
+  leadIntel?: any;
+  autoNudgeCount?: number;
 }
 
 interface PresetQuery {
@@ -256,6 +258,7 @@ function getInitialInboxForTemplate(
     guardRepeatCount: 0,
     guardLastRepeatAt: null,
     isStale: false,
+    autoNudgeCount: 0,
   };
 
   // Card 2: An open lead with high/medium intent
@@ -355,6 +358,7 @@ function getInitialInboxForTemplate(
     guardRepeatCount: 0,
     guardLastRepeatAt: null,
     isStale: false,
+    autoNudgeCount: 0,
   };
 
   const card3: Conversation = {
@@ -390,6 +394,7 @@ function getInitialInboxForTemplate(
     guardRepeatCount: 0,
     guardLastRepeatAt: null,
     isStale: false,
+    autoNudgeCount: 0,
   };
 
   return [card1, card2, card3];
@@ -400,6 +405,37 @@ export default function DemoPage() {
   const [dbBusiness, setDbBusiness] = useState<any>(null);
   const [dbConversations, setDbConversations] = useState<Conversation[]>([]);
   const [dbTransactions, setDbTransactions] = useState<any[]>([]);
+
+  // Lead intelligence state for sandbox
+  const [intel, setIntel] = useState<any>(null);
+  const [loadingIntel, setLoadingIntel] = useState(false);
+
+  const fetchLeadIntelForSandbox = async (convId: string, history: any[]) => {
+    setLoadingIntel(true);
+    try {
+      const res = await fetch("/api/lead-intel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chatHistory: history,
+          businessName: businessName,
+          businessType: businessType,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setIntel(data);
+        // Save to inboxList
+        setInboxList((prev) =>
+          prev.map((c) => (c.id === convId ? { ...c, leadIntel: data } : c))
+        );
+      }
+    } catch (err) {
+      console.error("Error fetching sandbox lead intel:", err);
+    } finally {
+      setLoadingIntel(false);
+    }
+  };
 
   const [isSetupComplete, setIsSetupComplete] = useState(false);
   const [setupTemplate, setSetupTemplate] = useState("salon");
@@ -524,6 +560,15 @@ export default function DemoPage() {
 
   const [activeConversationId, setActiveConversationId] = useState<string>("conv-1");
 
+  useEffect(() => {
+    if (isSetupComplete && activeConversationId) {
+      const activeConv = inboxList.find((c) => c.id === activeConversationId);
+      if (activeConv && !activeConv.leadIntel && !loadingIntel) {
+        fetchLeadIntelForSandbox(activeConversationId, activeConv.chatHistory || []);
+      }
+    }
+  }, [isSetupComplete, activeConversationId]);
+
   const selectConversation = (id: string) => {
     if (id === activeConversationId) return;
 
@@ -539,6 +584,10 @@ export default function DemoPage() {
         setGuardRepeatCount(nextConv.guardRepeatCount || 0);
         setGuardLastRepeatAt(nextConv.guardLastRepeatAt || null);
         setIsStale(nextConv.isStale || false);
+        setIntel(nextConv.leadIntel || null);
+        if (!nextConv.leadIntel) {
+          fetchLeadIntelForSandbox(id, nextConv.chatHistory || []);
+        }
       }
 
       return prev.map((c) => {
@@ -554,6 +603,7 @@ export default function DemoPage() {
             guardRepeatCount,
             guardLastRepeatAt,
             isStale,
+            leadIntel: intel,
           };
         }
         return c;
@@ -747,7 +797,8 @@ export default function DemoPage() {
                   guardLastMessageHash: c.last_message_hash || null,
                   guardRepeatCount: c.repeat_count || 0,
                   guardLastRepeatAt: c.last_repeat_at || null,
-                  isStale: c.is_stale || false
+                  isStale: c.is_stale || false,
+                  autoNudgeCount: c.auto_nudge_count || 0
                 };
               });
 
@@ -1114,7 +1165,8 @@ export default function DemoPage() {
             ...conv,
             lastMessage: isVoice ? "[Voice Note]" : text,
             time: "Just now",
-            chatHistory: newHistory
+            chatHistory: newHistory,
+            autoNudgeCount: 0
           };
         }
         return conv;
@@ -1500,6 +1552,7 @@ export default function DemoPage() {
 
       // Clear stale state if customer replies
       setIsStale(false);
+      fetchLeadIntelForSandbox(activeConversationId, finalHistory);
     } catch (e: any) {
       setIsTyping(false);
       console.error(e);
@@ -1526,68 +1579,146 @@ export default function DemoPage() {
       return;
     }
 
-    setIsStale(true);
-    setIsGeneratingNudge(true);
-    setActiveTab("inbox"); // Focus inbox tab
+    const activeConv = inboxList.find(c => c.id === activeConversationId);
+    const currentNudgeCount = activeConv?.autoNudgeCount || 0;
 
-    // Update active inbox card to stale
-    setInboxList((prev) => {
-      const updated = prev.map((conv) => {
-        if (conv.id === activeConversationId) {
-          return {
-            ...conv,
-            status: "stale" as const,
-            time: `${staleTimeLimit}m ago`,
-            isStale: true
-          };
-        }
-        return conv;
-      });
-      return [...updated];
-    });
+    if (currentNudgeCount < 2) {
+      // AI automatically generates and sends the nudge message
+      setIsGeneratingNudge(true);
+      setIsTyping(true);
 
-    if (!activeConversationId.startsWith("conv-") && dbBusiness) {
       try {
-        await supabase
-          .from("conversations")
-          .update({
-            is_stale: true,
-            stale_detected_at: new Date().toISOString(),
-            status: "stale"
+        const response = await fetch("/api/demo-chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "Please generate a friendly follow-up nudge draft based on this conversation. Respond in the customer's language. Respond with ONLY the follow-up copy, no JSON, no quotes.",
+            chatHistory: chatHistory.filter((m) => m.sender !== "system"),
+            documentText: knowledgeText,
+            businessName,
+            businessType
           })
-          .eq("id", activeConversationId);
-      } catch (dbErr) {
-        console.error("Failed to mark conversation stale in database:", dbErr);
+        });
+
+        const data = await response.json();
+        const autoNudgeText = data.response || "Hey! Just wanted to check if you had any other questions about booking your service?";
+
+        const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const autoNudgeMsg: Message = {
+          sender: "auto-nudge",
+          text: autoNudgeText,
+          timestamp
+        };
+
+        const updatedHistory = [...chatHistory, autoNudgeMsg];
+        setChatHistory(updatedHistory);
+
+        // Fetch lead intelligence on updated history
+        fetchLeadIntelForSandbox(activeConversationId, updatedHistory);
+
+        setInboxList((prev) =>
+          prev.map((c) => {
+            if (c.id === activeConversationId) {
+              return {
+                ...c,
+                chatHistory: updatedHistory,
+                lastMessage: `AI Auto-Nudge [${currentNudgeCount + 1}/2]: "${autoNudgeText.substring(0, 30)}..."`,
+                autoNudgeCount: currentNudgeCount + 1,
+                status: "auto-handled",
+                time: "Just now",
+                isStale: false
+              };
+            }
+            return c;
+          })
+        );
+
+        if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+          try {
+            await supabase.from("messages").insert({
+              conversation_id: activeConversationId,
+              business_id: dbBusiness.id,
+              role: "agent",
+              content: autoNudgeText
+            });
+
+            await supabase
+              .from("conversations")
+              .update({
+                is_stale: false,
+                stale_detected_at: null,
+                status: "auto-handled",
+                auto_nudge_count: currentNudgeCount + 1
+              })
+              .eq("id", activeConversationId);
+          } catch (dbErr) {
+            console.error("Failed to persist auto-nudge to database:", dbErr);
+          }
+        }
+      } catch (err) {
+        console.error("Auto-nudge generation error:", err);
+      } finally {
+        setIsGeneratingNudge(false);
+        setIsTyping(false);
       }
-    }
 
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      const historyText = chatHistory
-        .filter((m) => m.sender !== "system")
-        .map((m) => `${m.sender === "customer" ? "Customer" : "Agent"}: ${m.text}`)
-        .join("\n");
+    } else {
+      // 2 automatic nudges sent. Trigger stale lead warning banner for the owner!
+      setIsStale(true);
+      setIsGeneratingNudge(true);
+      setActiveTab("inbox"); // Focus inbox tab
 
-      // Generate a follow-up draft using Gemini 3.5 Flash directly
-      const response = await fetch("/api/demo-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: "Please generate a friendly follow-up nudge draft based on this conversation. Respond in the customer's language. Respond with ONLY the follow-up copy, no JSON, no quotes.",
-          chatHistory: chatHistory.filter((m) => m.sender !== "system"),
-          documentText: knowledgeText,
-          businessName,
-          businessType
-        })
+      setInboxList((prev) => {
+        const updated = prev.map((conv) => {
+          if (conv.id === activeConversationId) {
+            return {
+              ...conv,
+              status: "stale" as const,
+              time: `${staleTimeLimit}m ago`,
+              isStale: true
+            };
+          }
+          return conv;
+        });
+        return [...updated];
       });
 
-      const data = await response.json();
-      setIsGeneratingNudge(false);
-      setNudgeDraft(data.response || "Hey! Just wanted to check if you had any other questions about booking your service?");
-    } catch (e) {
-      console.error(e);
-      setIsGeneratingNudge(false);
-      setNudgeDraft("Hey! Just checking in to see if you would like to go ahead with booking the haircut/service we discussed earlier?");
+      if (!activeConversationId.startsWith("conv-") && dbBusiness) {
+        try {
+          await supabase
+            .from("conversations")
+            .update({
+              is_stale: true,
+              stale_detected_at: new Date().toISOString(),
+              status: "stale"
+            })
+            .eq("id", activeConversationId);
+        } catch (dbErr) {
+          console.error("Failed to mark conversation stale in database:", dbErr);
+        }
+      }
+
+      try {
+        const response = await fetch("/api/demo-chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "Please generate a friendly follow-up nudge draft based on this conversation. Respond in the customer's language. Respond with ONLY the follow-up copy, no JSON, no quotes.",
+            chatHistory: chatHistory.filter((m) => m.sender !== "system"),
+            documentText: knowledgeText,
+            businessName,
+            businessType
+          })
+        });
+
+        const data = await response.json();
+        setIsGeneratingNudge(false);
+        setNudgeDraft(data.response || "Hey! Just wanted to check if you had any other questions about booking your service?");
+      } catch (e) {
+        console.error(e);
+        setIsGeneratingNudge(false);
+        setNudgeDraft("Hey! Just checking in to see if you would like to go ahead with booking the haircut/service we discussed earlier?");
+      }
     }
   };
 
@@ -1607,6 +1738,7 @@ export default function DemoPage() {
     setChatHistory(updatedHistory);
 
     setIsStale(false);
+    fetchLeadIntelForSandbox(activeConversationId, updatedHistory);
 
     setInboxList((prev) => {
       return prev.map((conv) => {
@@ -1617,7 +1749,8 @@ export default function DemoPage() {
             lastMessage: `Nudge Sent: "${nudgeDraft.substring(0, 30)}..."`,
             status: "open",
             time: "Just now",
-            isStale: false
+            isStale: false,
+            autoNudgeCount: 0
           };
         }
         return conv;
@@ -1640,7 +1773,8 @@ export default function DemoPage() {
           .update({
             is_stale: false,
             stale_detected_at: null,
-            status: "open"
+            status: "open",
+            auto_nudge_count: 0
           })
           .eq("id", activeConversationId);
       } catch (dbErr) {
@@ -1675,7 +1809,8 @@ export default function DemoPage() {
             time: "Just now",
             chatHistory: newHistory,
             status: "open",
-            isStale: false
+            isStale: false,
+            autoNudgeCount: 0
           };
         }
         return conv;
@@ -1683,6 +1818,7 @@ export default function DemoPage() {
     );
 
     setIsStale(false);
+    fetchLeadIntelForSandbox(activeConversationId, newHistory);
 
     // Sync to database if conversation is db-backed
     if (!activeConversationId.startsWith("conv-") && dbBusiness) {
@@ -1700,7 +1836,8 @@ export default function DemoPage() {
             last_message_at: new Date().toISOString(),
             is_stale: false,
             stale_detected_at: null,
-            status: "open"
+            status: "open",
+            auto_nudge_count: 0
           })
           .eq("id", activeConversationId);
       } catch (dbErr) {
@@ -1799,7 +1936,8 @@ export default function DemoPage() {
       guardLastMessageHash: null,
       guardRepeatCount: 0,
       guardLastRepeatAt: null,
-      isStale: false
+      isStale: false,
+      autoNudgeCount: 0
     };
 
     setInboxList(prev => [newConv, ...prev]);
@@ -2092,7 +2230,7 @@ export default function DemoPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-8 grid lg:grid-cols-12 gap-8 relative z-10">
+      <main className="max-w-7xl mx-auto px-6 py-8 grid lg:grid-cols-12 gap-8 relative z-10 w-full">
         {/* Left Side: WhatsApp Simulator */}
         {activeTab !== "inbox" && (
           <section className="lg:col-span-5 flex flex-col gap-6">
@@ -2493,7 +2631,7 @@ export default function DemoPage() {
       )}
 
       {/* Right Side: Wapi Portal & Workflow Logs */}
-      <section className={`${activeTab === "inbox" ? "lg:col-span-12" : "lg:col-span-7"} flex flex-col gap-6`}>
+      <section className={`${activeTab === "inbox" ? "lg:col-span-12 w-full" : "lg:col-span-7"} flex flex-col gap-6`}>
           <div className="flex flex-col gap-1.5">
             <h2 className="text-xl font-bold text-white flex items-center gap-2">
               <Bot className="w-5 h-5 text-emerald-400" />
@@ -2533,7 +2671,7 @@ export default function DemoPage() {
                   <div>
                     <h4 className="text-sm font-bold text-white">Stale Lead Alert</h4>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      This customer has gone quiet for {staleTimeLimit} minutes. Wapi generated a custom nudge follow-up.
+                      This customer has gone quiet for {staleTimeLimit} minutes. 2 automatic nudges were sent. Wapi generated a third follow-up draft for your manual review.
                     </p>
                   </div>
                 </div>
@@ -2616,7 +2754,7 @@ export default function DemoPage() {
           </div>
 
           {/* Active Tab Contents */}
-          <div className="flex-1 min-h-[460px]">
+          <div className="flex-1 min-h-[460px] w-full">
             {activeTab === "pipeline" && (
               <div className="flex flex-col gap-4">
                 {/* Live Slot-Filling Tracker Card */}
@@ -2901,7 +3039,7 @@ export default function DemoPage() {
             )}
 
             {activeTab === "inbox" && (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-4 w-full">
                 <div className="flex items-center justify-between border-b border-slate-900 pb-3">
                   <span className="text-xs font-mono text-slate-500">REAL-TIME PRIORITY INBOX QUEUE & OPERATOR CONSOLE</span>
                   <div className="flex items-center gap-3">
@@ -2917,9 +3055,9 @@ export default function DemoPage() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[550px]">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 h-[550px] w-full">
                   {/* Left Column: Conversation List */}
-                  <div className="lg:col-span-5 flex flex-col gap-3 overflow-y-auto pr-1 h-full max-h-[550px]">
+                  <div className="lg:col-span-4 flex flex-col gap-3 overflow-y-auto overflow-x-hidden pr-1 h-full max-h-[550px] w-full">
                     {inboxList.map((conv) => {
                       const isActive = conv.id === activeConversationId;
 
@@ -2961,6 +3099,11 @@ export default function DemoPage() {
                               <span className={`text-[8px] font-mono uppercase px-1.5 py-0.2 rounded ${statusBadge}`}>
                                 {conv.status === "blocked" ? "🚫 BLOCKED" : conv.status === "stale" ? "STALE LEAD" : conv.status}
                               </span>
+                              {conv.autoNudgeCount !== undefined && conv.autoNudgeCount > 0 && (
+                                <span className="text-[8px] font-mono uppercase px-1.5 py-0.2 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                                  🤖 AUTO-NUDGE ({conv.autoNudgeCount}/2)
+                                </span>
+                              )}
                             </div>
                             <p className="text-[11px] text-slate-400 truncate max-w-[200px]">&quot;{conv.lastMessage}&#34;</p>
 
@@ -2999,8 +3142,8 @@ export default function DemoPage() {
                     })}
                   </div>
 
-                  {/* Right Column: Active Conversation Chat Thread */}
-                  <div className="lg:col-span-7 bg-slate-950/40 border border-slate-900 rounded-2xl flex flex-col h-full overflow-hidden">
+                  {/* Middle Column: Active Conversation Chat Thread */}
+                  <div className="lg:col-span-5 bg-slate-950/40 border border-slate-900 rounded-2xl flex flex-col h-full overflow-hidden w-full">
                     {activeConversationId ? (
                       (() => {
                         const activeConv = inboxList.find(c => c.id === activeConversationId);
@@ -3085,7 +3228,7 @@ export default function DemoPage() {
                                         <p>{m.text}</p>
                                       </div>
                                       <span className="text-[8px] font-mono text-slate-600 mt-1 uppercase">
-                                        {isCustomer ? "Customer" : isOwner ? "You (Owner)" : "Wapi Agent"} • {m.timestamp}
+                                        {isCustomer ? "Customer" : isOwner ? "You (Owner)" : m.sender === "auto-nudge" ? "Wapi Agent (Auto-Nudge)" : "Wapi Agent"} • {m.timestamp}
                                       </span>
                                     </div>
                                   );
@@ -3126,6 +3269,69 @@ export default function DemoPage() {
                     ) : (
                       <div className="flex-1 flex items-center justify-center text-xs text-slate-500 font-mono">
                         Select a conversation to view chat history
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Right Column: Lead Intelligence */}
+                  <div className="lg:col-span-3 bg-slate-950/40 border border-slate-900 rounded-2xl p-4 flex flex-col gap-4 h-full overflow-y-auto overflow-x-hidden relative w-full">
+                    <div className="flex items-center justify-between border-b border-slate-900 pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <Bot className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="font-mono text-[10px] uppercase text-slate-400 font-bold">Intelligence</span>
+                      </div>
+                      {intel?.leadWarmth && (
+                        <span className={`text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider font-mono ${
+                          intel.leadWarmth === 'Hot'
+                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                            : intel.leadWarmth === 'Warm'
+                              ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                              : 'bg-slate-500/10 text-slate-400 border border-slate-500/20'
+                        }`}>
+                          {intel.leadWarmth}
+                        </span>
+                      )}
+                    </div>
+
+                    {loadingIntel ? (
+                      <div className="flex flex-col gap-3 py-4">
+                        <div className="h-3 bg-slate-900/60 rounded animate-pulse w-3/4" />
+                        <div className="h-12 bg-slate-900/60 rounded animate-pulse" />
+                        <div className="h-3 bg-slate-900/60 rounded animate-pulse w-1/2" />
+                        <div className="h-16 bg-slate-900/60 rounded animate-pulse" />
+                      </div>
+                    ) : intel ? (
+                      <div className="flex flex-col gap-3">
+                        <div className="bg-slate-900/40 border border-slate-900/80 rounded-lg p-2.5 flex flex-col gap-1">
+                          <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">AI Summary</span>
+                          <p className="text-[11px] text-slate-300 leading-relaxed">{intel.summary}</p>
+                        </div>
+
+                        <div className="bg-slate-900/40 border border-slate-900/80 rounded-lg p-2.5 flex flex-col gap-1">
+                          <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider font-mono">Promised</span>
+                          <p className="text-[11px] text-slate-300 leading-relaxed bg-slate-950 p-1.5 rounded border border-slate-900/60">
+                            {intel.promised || "None."}
+                          </p>
+                        </div>
+
+                        <div className="bg-slate-900/40 border border-slate-900/80 rounded-lg p-2.5 flex flex-col gap-2">
+                          <span className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Next Actions</span>
+                          <div className="flex flex-col gap-2">
+                            {intel.nextActions?.map((action: string, idx: number) => (
+                              <div key={idx} className="flex gap-1.5 items-start">
+                                <span className="w-3.5 h-3.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shrink-0 text-[8px] font-mono font-bold">
+                                  {idx + 1}
+                                </span>
+                                <span className="text-[11px] text-slate-300 leading-snug">{action}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="py-12 text-center flex flex-col items-center justify-center gap-1.5">
+                        <HelpCircle className="w-6 h-6 text-slate-800" />
+                        <p className="text-[10px] text-slate-600 font-mono">No analysis compiled yet.</p>
                       </div>
                     )}
                   </div>
