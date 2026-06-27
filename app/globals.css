@@ -79,11 +79,11 @@
     @apply border-border outline-ring/50;
   }
   html {
-    background-color: #0B3D52 !important;
+    background-color: #060f17 !important;
     scroll-behavior: smooth;
   }
   body {
-    background-color: #0B3D52 !important;
+    background-color: #060f17 !important;
     color: #f8fafc;
     font-family: var(--font-inter), sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -175,4 +175,57 @@
 }
 .font-inter {
   font-family: var(--font-inter), sans-serif;
+}
+
+/* Wapi Premium Flip Card Animation */
+.wapi-flip-card {
+  background-color: transparent;
+  perspective: 1000px;
+  height: 240px; /* fixed height for cards to flip cleanly */
+}
+
+.wapi-flip-card-inner {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+  transform-style: preserve-3d;
+}
+
+.wapi-flip-card:hover .wapi-flip-card-inner {
+  transform: rotateY(180deg);
+}
+
+.wapi-flip-card-front, .wapi-flip-card-back {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  border-radius: 1rem;
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.3);
+}
+
+.wapi-flip-card-front {
+  background: linear-gradient(135deg, #0f2a3d 0%, #061521 100%);
+  border: 1px solid rgba(0, 180, 216, 0.25);
+  color: #ffffff;
+  z-index: 2;
+  transition: border-color 0.3s ease;
+}
+
+.wapi-flip-card:hover .wapi-flip-card-front {
+  border-color: rgba(0, 180, 216, 0.6);
+}
+
+.wapi-flip-card-back {
+  background: linear-gradient(135deg, #0B3D52 0%, #174f46 100%);
+  border: 1px solid rgba(87, 204, 153, 0.35);
+  color: #ffffff;
+  transform: rotateY(180deg);
 }
