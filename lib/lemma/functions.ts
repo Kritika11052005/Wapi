@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { LemmaFunction } from "@lemma/sdk";
 import { wApiAgent } from "./agent";
 

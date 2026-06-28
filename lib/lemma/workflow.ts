@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { LemmaWorkflow } from "@lemma/sdk";
 import { wApiAgent } from "./agent";
 import { preprocessCustomerMessage } from "@/lib/agent/preprocessor";
